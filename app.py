@@ -1,23 +1,45 @@
-import json
+import base64
 import os
-import subprocess
-import sys
-from typing import List
+import time
+from contextlib import asynccontextmanager
+from typing import List, Tuple
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from pika.exceptions import AMQPError
 from pydantic import BaseModel
 
+import broker
+from job_store import JobStore
+
 UPLOAD_FOLDER = "data"
-STRUCTURED_OUTPUT_FOLDER = "structured_output"
+MAX_FILE_MB = int(os.getenv("MAX_FILE_MB", "25"))
+MAX_FILES_PER_JOB = int(os.getenv("MAX_FILES_PER_JOB", "100"))
+PROCESS_TIMEOUT = int(os.getenv("PROCESS_TIMEOUT", "600"))
 
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-os.makedirs(STRUCTURED_OUTPUT_FOLDER, exist_ok=True)
 
-app = FastAPI(title="InvoiceAI", description="Extract structured data from unstructured invoice PDFs.")
+store = JobStore(os.getenv("STORAGE_DIR", "storage"))
 
-# The Next.js frontend proxies /api/* here, but allow direct calls from its dev server too.
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    consumer = None
+    if os.getenv("RESULT_CONSUMER", "1") == "1":
+        consumer = broker.ResultConsumer(lambda result: store.save_result(result))
+        consumer.start()
+    yield
+    if consumer:
+        consumer.stop()
+
+
+app = FastAPI(
+    title="InvoiceAI",
+    description="Extract structured data from unstructured invoice PDFs. Processing runs on worker pods via RabbitMQ.",
+    lifespan=lifespan,
+)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=os.getenv("CORS_ORIGINS", "http://localhost:3000").split(","),
@@ -36,6 +58,38 @@ def safe_path(filename: str) -> str:
     if not name:
         raise HTTPException(status_code=400, detail="Invalid filename")
     return os.path.join(UPLOAD_FOLDER, name)
+
+
+def submit_job(files: List[Tuple[str, bytes]]) -> str:
+    """Create a job and send one message per PDF to the workers."""
+    job_id = store.create([name for name, _ in files])
+    messages = [
+        {"job_id": job_id, "filename": name, "pdf_b64": base64.b64encode(data).decode()} for name, data in files
+    ]
+    try:
+        broker.publish_jobs(messages)
+    except AMQPError as e:
+        store.delete(job_id)
+        raise HTTPException(status_code=503, detail=f"Job queue unavailable: {e!r}")
+    return job_id
+
+
+def read_pdfs(uploads: List[UploadFile]) -> List[Tuple[str, bytes]]:
+    files, seen = [], set()
+    for upload in uploads:
+        name = os.path.basename(upload.filename or "")
+        if not name.lower().endswith(".pdf"):
+            continue
+        data = upload.file.read()
+        if len(data) > MAX_FILE_MB * 1024 * 1024:
+            raise HTTPException(status_code=413, detail=f"{name} is larger than {MAX_FILE_MB} MB")
+        # Results are keyed by filename, so keep names unique within a job.
+        stem, n = name[:-4], 2
+        while name in seen:
+            name, n = f"{stem} ({n}).pdf", n + 1
+        seen.add(name)
+        files.append((name, data))
+    return files
 
 
 @app.get("/health")
@@ -71,26 +125,59 @@ def delete_file(body: DeleteRequest):
 
 @app.post("/process")
 def process_files():
-    """Run OCR pipeline on all uploaded PDFs and return structured JSONs"""
-    results = []
+    """Send the uploaded PDFs to the workers and wait for their results (used by the web UI)."""
+    names = sorted(f for f in os.listdir(UPLOAD_FOLDER) if f.lower().endswith(".pdf"))
+    if not names:
+        return {"success": False, "error": "No uploaded PDFs to process"}
 
-    # Sync endpoint, so FastAPI runs this blocking call in its threadpool.
+    files = []
+    for name in names:
+        with open(os.path.join(UPLOAD_FOLDER, name), "rb") as f:
+            files.append((name, f.read()))
+
     try:
-        subprocess.run([sys.executable, "ocr_pipeline.py"], check=True)
-    except subprocess.CalledProcessError as e:
-        return {"success": False, "error": f"OCR pipeline failed: {str(e)}"}
+        job_id = submit_job(files)
+    except HTTPException as e:
+        return {"success": False, "error": e.detail}
 
-    for filename in os.listdir(STRUCTURED_OUTPUT_FOLDER):
-        if filename.endswith(".json"):
-            file_path = os.path.join(STRUCTURED_OUTPUT_FOLDER, filename)
-            try:
-                with open(file_path, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                results.append({"filename": filename, "structured_data": data})
-            except Exception as e:
-                results.append({"filename": filename, "error": str(e)})
+    # Handed to the workers; clear them so the next /process doesn't resend them.
+    for name in names:
+        os.remove(os.path.join(UPLOAD_FOLDER, name))
 
-    return {"success": True, "results": results}
+    # Sync endpoint, so this wait runs in FastAPI's threadpool, not the event loop.
+    deadline = time.time() + PROCESS_TIMEOUT
+    while time.time() < deadline:
+        status = store.status(job_id)
+        if status["status"] == "done":
+            return {"success": True, "job_id": job_id, "results": status["results"]}
+        time.sleep(1)
+
+    return {
+        "success": False,
+        "job_id": job_id,
+        "error": f"Still processing after {PROCESS_TIMEOUT}s; check GET /jobs/{job_id}",
+    }
+
+
+@app.post("/jobs", status_code=202)
+def create_job(pdfs: List[UploadFile] = File(...)):
+    """Bulk entry point: queue PDFs for the workers and return immediately."""
+    if len(pdfs) > MAX_FILES_PER_JOB:
+        raise HTTPException(status_code=413, detail=f"At most {MAX_FILES_PER_JOB} files per job")
+    files = read_pdfs(pdfs)
+    if not files:
+        raise HTTPException(status_code=400, detail="No PDF files in upload")
+
+    job_id = submit_job(files)
+    return {"job_id": job_id, "status": "queued", "files": [name for name, _ in files]}
+
+
+@app.get("/jobs/{job_id}")
+def get_job(job_id: str):
+    status = store.status(job_id)
+    if status is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return status
 
 
 if __name__ == "__main__":
