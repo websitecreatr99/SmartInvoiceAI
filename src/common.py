@@ -90,7 +90,8 @@ class DataExtractionHandler:
         """
         logger.debug(f"Saving JSON data to file: {filename}")
         try:
-            with open(filename, 'w') as file:
+            # Explicit UTF-8: the Windows default (cp1252) breaks readers on characters like "·".
+            with open(filename, 'w', encoding='utf-8') as file:
                 file.write(json_data)
             logger.info(f"JSON data successfully saved to {filename}")
         except Exception as e:
