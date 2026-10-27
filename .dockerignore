@@ -1,0 +1,25 @@
+.git
+.github
+.env
+.venv
+venv
+__pycache__
+*.pyc
+*.egg-info
+logs
+
+# runtime data — mount as volumes instead
+data
+output
+structured_output
+
+# not needed by the API
+research
+assets
+static
+templates
+tests
+node_modules
+next-env.d.ts
+public
+frontend
