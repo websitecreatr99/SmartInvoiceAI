@@ -40,3 +40,9 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Python leftovers from the backend branches sharing this checkout
+__pycache__/
+*.py[cod]
+*.egg-info/
+logs/
