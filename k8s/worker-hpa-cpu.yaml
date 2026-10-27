@@ -1,0 +1,20 @@
+# Fallback when KEDA isn't installed: scale on CPU (OCR is CPU-bound).
+# Apply this OR worker-keda.yaml, not both.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: invoiceai-worker
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: invoiceai-worker
+  minReplicas: 2
+  maxReplicas: 20
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70

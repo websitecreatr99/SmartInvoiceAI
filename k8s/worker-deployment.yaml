@@ -1,0 +1,54 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: invoiceai-worker
+  labels:
+    app: invoiceai-worker
+spec:
+  # Starting size; KEDA (worker-keda.yaml) or the HPA (worker-hpa-cpu.yaml) takes over scaling.
+  replicas: 2
+  selector:
+    matchLabels:
+      app: invoiceai-worker
+  template:
+    metadata:
+      labels:
+        app: invoiceai-worker
+    spec:
+      # Lets an in-flight PDF finish and ack on scale-down; otherwise RabbitMQ re-queues it.
+      terminationGracePeriodSeconds: 600
+      containers:
+        - name: worker
+          image: ghcr.io/kishannextq/hackathon-worker:latest
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: RABBITMQ_URL
+              valueFrom:
+                secretKeyRef:
+                  name: invoiceai-secrets
+                  key: RABBITMQ_URL
+            - name: GEMINI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: invoiceai-secrets
+                  key: GEMINI_API_KEY
+            - name: GOOGLE_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: invoiceai-secrets
+                  key: GEMINI_API_KEY
+            - name: WORKER_PREFETCH
+              value: "1"
+          resources:
+            requests:
+              cpu: "1"
+              memory: 2Gi
+            limits:
+              cpu: "2"
+              memory: 4Gi
+          livenessProbe:
+            exec:
+              command: ["python", "-c", "import os, time, sys; sys.exit(time.time() - os.path.getmtime(os.environ['ALIVE_FILE']) > 60)"]
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            failureThreshold: 3

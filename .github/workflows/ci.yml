@@ -1,10 +1,10 @@
-name: CI/CD
+name: Worker CI/CD
 
 on:
   push:
-    branches: [fastapi, worker, main]
+    branches: [worker]
   pull_request:
-    branches: [fastapi, worker, main]
+    branches: [worker]
   workflow_dispatch:
 
 concurrency:
@@ -12,7 +12,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  IMAGE: ghcr.io/${{ github.repository }}-api
+  IMAGE: ghcr.io/${{ github.repository }}-worker
 
 jobs:
   test:
@@ -32,12 +32,22 @@ jobs:
       - run: pytest -v
 
   docker:
-    name: Build, smoke test & publish image
+    name: Build, smoke test against RabbitMQ & publish
     needs: test
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
+    services:
+      rabbitmq:
+        image: rabbitmq:3.13-management-alpine
+        ports:
+          - 5672:5672
+        options: >-
+          --health-cmd "rabbitmq-diagnostics -q ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
     steps:
       - uses: actions/checkout@v4
 
@@ -52,27 +62,31 @@ jobs:
             type=ref,event=branch
             type=ref,event=pr
             type=sha,format=short
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/worker' }}
 
       - name: Build image
         uses: docker/build-push-action@v6
         with:
           context: .
           load: true
-          tags: invoiceai-api:local
+          tags: invoiceai-worker:ci
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Smoke test full stack (nginx, API replicas, Redis, workers)
-        run: bash scripts/smoke_test.sh 8080
+      - name: Start worker container
+        run: |
+          docker run -d --name worker --network host \
+            -e RABBITMQ_URL=amqp://guest:guest@localhost:5672/%2F \
+            invoiceai-worker:ci
 
-      - name: Upload container logs
+      - name: Smoke test (job in -> result out)
+        run: |
+          pip install pika==1.3.2
+          RABBITMQ_URL=amqp://guest:guest@localhost:5672/%2F python scripts/smoke_test.py
+
+      - name: Worker logs
         if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: smoke-compose-log
-          path: smoke-compose.log
-          if-no-files-found: ignore
+        run: docker logs worker 2>&1 | tail -100
 
       - name: Log in to GHCR
         if: github.event_name != 'pull_request'
@@ -82,7 +96,6 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Layers come from the cache populated by the build step above.
       - name: Publish image
         if: github.event_name != 'pull_request'
         uses: docker/build-push-action@v6
