@@ -39,6 +39,28 @@ spec:
                   key: GEMINI_API_KEY
             - name: WORKER_PREFETCH
               value: "1"
+            # LLM cost/latency tracing; omit these keys from the secret to disable Langfuse.
+            - name: LANGFUSE_PUBLIC_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: invoiceai-secrets
+                  key: LANGFUSE_PUBLIC_KEY
+                  optional: true
+            - name: LANGFUSE_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: invoiceai-secrets
+                  key: LANGFUSE_SECRET_KEY
+                  optional: true
+            - name: LANGFUSE_HOST
+              valueFrom:
+                secretKeyRef:
+                  name: invoiceai-secrets
+                  key: LANGFUSE_HOST
+                  optional: true
+          ports:
+            - name: metrics
+              containerPort: 9100
           resources:
             requests:
               cpu: "1"

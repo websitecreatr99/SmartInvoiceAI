@@ -16,6 +16,7 @@ import time
 import pika
 from pika.exceptions import AMQPConnectionError
 
+import telemetry
 from src.common import DataExtractionHandler
 from src.logger_config import setup_logger
 
@@ -27,6 +28,7 @@ RESULTS_QUEUE = os.getenv("RESULTS_QUEUE", "invoice.results")
 PREFETCH = int(os.getenv("WORKER_PREFETCH", "1"))
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 ALIVE_FILE = os.getenv("ALIVE_FILE", os.path.join(tempfile.gettempdir(), "worker-alive"))
+METRICS_PORT = int(os.getenv("METRICS_PORT", "9100"))
 
 
 def process_message(payload: dict, model_handler, extract_text_from_pdf, handler: DataExtractionHandler) -> dict:
@@ -34,27 +36,38 @@ def process_message(payload: dict, model_handler, extract_text_from_pdf, handler
     job_id = payload.get("job_id")
     filename = os.path.basename(payload.get("filename") or "document.pdf")
     result = {"job_id": job_id, "filename": filename}
-    try:
-        with tempfile.TemporaryDirectory() as tmp:
-            pdf_path = os.path.join(tmp, filename)
-            with open(pdf_path, "wb") as f:
-                f.write(base64.b64decode(payload["pdf_b64"]))
+    started = time.perf_counter()
+    telemetry.IN_PROGRESS.inc()
+    with telemetry.trace_pdf(job_id, filename) as span:
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                pdf_path = os.path.join(tmp, filename)
+                with open(pdf_path, "wb") as f:
+                    f.write(base64.b64decode(payload["pdf_b64"]))
 
-            ocr_lines = extract_text_from_pdf(pdf_path, tmp)
-            ocr_text = "\n".join(f"{text} (conf: {conf})" for text, conf in ocr_lines)
+                with telemetry.stage("ocr"):
+                    ocr_lines = extract_text_from_pdf(pdf_path, tmp)
+                ocr_text = "\n".join(f"{text} (conf: {conf})" for text, conf in ocr_lines)
 
-        extracted = model_handler.extract_with_gemini(ocr_text=ocr_text)
-        if not extracted:
-            raise RuntimeError("LLM extraction returned no data")
+            with telemetry.stage("llm"):
+                extracted = model_handler.extract_with_gemini(
+                    ocr_text=ocr_text, callbacks=telemetry.llm_callbacks(GEMINI_MODEL)
+                )
+            if not extracted:
+                raise RuntimeError("LLM extraction returned no data")
 
-        validated = handler.validate_data(extracted)
-        if validated.startswith("Validation Error"):
-            raise RuntimeError(validated)
+            with telemetry.stage("validate"):
+                validated = handler.validate_data(extracted)
+            if validated.startswith("Validation Error"):
+                raise RuntimeError(validated)
 
-        result.update(ok=True, structured_data=json.loads(validated))
-    except Exception as e:
-        logger.error(f"Job {job_id}: failed on {filename}: {e}", exc_info=True)
-        result.update(ok=False, error=str(e))
+            result.update(ok=True, structured_data=json.loads(validated))
+        except Exception as e:
+            logger.error(f"Job {job_id}: failed on {filename}: {e}", exc_info=True)
+            result.update(ok=False, error=str(e))
+        finally:
+            telemetry.IN_PROGRESS.dec()
+            telemetry.record_pdf(result.get("ok", False), time.perf_counter() - started, span, result.get("error"))
     return result
 
 
@@ -139,7 +152,9 @@ class Worker:
                     break
                 logger.warning(f"RabbitMQ unavailable ({e}); retrying in 5s")
                 time.sleep(5)
+        telemetry.shutdown()
 
 
 if __name__ == "__main__":
+    telemetry.start(METRICS_PORT)
     Worker().run()
