@@ -4,13 +4,15 @@ import time
 from contextlib import asynccontextmanager
 from typing import List, Tuple
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, HTTPException, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pika.exceptions import AMQPError
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from pydantic import BaseModel
 
 import broker
+import metrics
 from job_store import JobStore
 
 UPLOAD_FOLDER = "data"
@@ -23,11 +25,25 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 store = JobStore(os.getenv("STORAGE_DIR", "storage"))
 
 
+def on_result(result: dict) -> bool:
+    """Store a worker result and record how long the job took once its last PDF is in."""
+    job_id = result.get("job_id")
+    before = store.status(job_id)
+    saved = store.save_result(result)
+    if not saved:
+        metrics.RESULTS.labels("unknown_job").inc()
+        return False
+    metrics.RESULTS.labels("ok" if result.get("ok") else "error").inc()
+    if before and before["status"] != "done" and store.status(job_id)["status"] == "done":
+        metrics.JOB_SECONDS.observe(time.time() - store.created_at(job_id))
+    return True
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     consumer = None
     if os.getenv("RESULT_CONSUMER", "1") == "1":
-        consumer = broker.ResultConsumer(lambda result: store.save_result(result))
+        consumer = broker.ResultConsumer(lambda result: on_result(result))
         consumer.start()
     yield
     if consumer:
@@ -48,6 +64,18 @@ app.add_middleware(
 )
 
 
+@app.middleware("http")
+async def record_request_metrics(request: Request, call_next):
+    started = time.perf_counter()
+    response = await call_next(request)
+    # Label by route template (/jobs/{job_id}), not the raw path, to keep cardinality bounded.
+    route = request.scope.get("route")
+    path = route.path if route else "unmatched"
+    metrics.REQUEST_SECONDS.labels(request.method, path).observe(time.perf_counter() - started)
+    metrics.REQUESTS.labels(request.method, path, str(response.status_code)).inc()
+    return response
+
+
 class DeleteRequest(BaseModel):
     filename: str
 
@@ -60,7 +88,7 @@ def safe_path(filename: str) -> str:
     return os.path.join(UPLOAD_FOLDER, name)
 
 
-def submit_job(files: List[Tuple[str, bytes]]) -> str:
+def submit_job(files: List[Tuple[str, bytes]], endpoint: str) -> str:
     """Create a job and send one message per PDF to the workers."""
     job_id = store.create([name for name, _ in files])
     messages = [
@@ -70,7 +98,10 @@ def submit_job(files: List[Tuple[str, bytes]]) -> str:
         broker.publish_jobs(messages)
     except AMQPError as e:
         store.delete(job_id)
+        metrics.PUBLISH_FAILURES.inc()
         raise HTTPException(status_code=503, detail=f"Job queue unavailable: {e!r}")
+    metrics.JOBS_SUBMITTED.labels(endpoint).inc()
+    metrics.PDFS_SUBMITTED.inc(len(files))
     return job_id
 
 
@@ -95,6 +126,11 @@ def read_pdfs(uploads: List[UploadFile]) -> List[Tuple[str, bytes]]:
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+@app.get("/metrics", include_in_schema=False)
+def prometheus_metrics():
+    return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
 @app.post("/upload")
@@ -136,7 +172,7 @@ def process_files():
             files.append((name, f.read()))
 
     try:
-        job_id = submit_job(files)
+        job_id = submit_job(files, "process")
     except HTTPException as e:
         return {"success": False, "error": e.detail}
 
@@ -168,7 +204,7 @@ def create_job(pdfs: List[UploadFile] = File(...)):
     if not files:
         raise HTTPException(status_code=400, detail="No PDF files in upload")
 
-    job_id = submit_job(files)
+    job_id = submit_job(files, "jobs")
     return {"job_id": job_id, "status": "queued", "files": [name for name, _ in files]}
 
 
