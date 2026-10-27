@@ -1,60 +1,58 @@
 #!/usr/bin/env bash
-# Start the API image and exercise every endpoint against the running container.
-# Usage: scripts/smoke_test.sh [image] [port]
+# Bring up the full stack (nginx -> API replicas -> Redis -> workers) and check it end to end.
+# Usage: scripts/smoke_test.sh [port]
 set -euo pipefail
 
-IMAGE="${1:-invoiceai-api:local}"
-PORT="${2:-5000}"
-NAME="invoiceai-smoke-$$"
+PORT="${1:-8080}"
 BASE="http://127.0.0.1:${PORT}"
+export PORT API_REPLICAS=2 WORKER_REPLICAS=2
 
 cleanup() {
-  docker logs "$NAME" > smoke-container.log 2>&1 || true
-  docker rm -f "$NAME" > /dev/null 2>&1 || true
+  docker compose logs --no-color > smoke-compose.log 2>&1 || true
+  docker compose down -v > /dev/null 2>&1 || true
 }
 trap cleanup EXIT
 
 fail() {
   echo "FAIL: $1"
-  echo "--- container logs ---"
-  docker logs "$NAME" 2>&1 | tail -50 || true
+  docker compose logs --no-color --tail 40 api worker 2>&1 || true
   exit 1
 }
 
-docker run -d --name "$NAME" -p "${PORT}:5000" "$IMAGE" > /dev/null
+docker compose up -d
 
-echo "Waiting for container to become healthy..."
-for _ in $(seq 1 30); do
-  status=$(docker inspect -f '{{.State.Health.Status}}' "$NAME" 2>/dev/null || echo starting)
-  [ "$status" = "healthy" ] && break
-  [ "$status" = "unhealthy" ] && fail "container reported unhealthy"
+echo "Waiting for the API behind nginx..."
+for _ in $(seq 1 60); do
+  curl -fsS "$BASE/health" > /dev/null 2>&1 && break
   sleep 2
 done
-[ "$status" = "healthy" ] || fail "container did not become healthy in time"
-echo "ok   container healthy"
+curl -fsS "$BASE/health" > /dev/null || fail "API never became reachable through nginx"
+echo "ok   GET /health via nginx"
 
-body=$(curl -fsS "$BASE/health") || fail "/health request failed"
-[ "$body" = '{"status":"ok"}' ] || fail "/health returned $body"
-echo "ok   GET /health"
+replicas=$(for _ in $(seq 1 20); do curl -fsS -D - -o /dev/null "$BASE/health" | tr -d '\r' | awk -F': ' 'tolower($1)=="x-served-by"{print $2}'; done | sort -u | wc -l)
+[ "$replicas" -ge 2 ] || fail "expected requests spread over 2 API replicas, saw $replicas"
+echo "ok   load balanced across $replicas API replicas"
 
 pdf=$(mktemp --suffix=.pdf)
 printf '%%PDF-1.4\n%%%%EOF\n' > "$pdf"
-body=$(curl -fsS -F "pdfs=@${pdf};filename=smoke.pdf" "$BASE/upload") || fail "/upload request failed"
-echo "$body" | grep -q '"uploaded":\["smoke.pdf"\]' || fail "/upload returned $body"
-echo "ok   POST /upload"
+body=$(curl -fsS -F "pdfs=@${pdf};filename=smoke.pdf" "$BASE/jobs") || fail "POST /jobs failed"
+job_id=$(echo "$body" | sed -n 's/.*"job_id":"\([^"]*\)".*/\1/p')
+[ -n "$job_id" ] || fail "POST /jobs returned $body"
+echo "ok   POST /jobs -> $job_id"
 
-body=$(curl -fsS -H 'Content-Type: application/json' -d '{"filename":"smoke.pdf"}' "$BASE/delete") || fail "/delete request failed"
-echo "$body" | grep -q '"deleted":"smoke.pdf"' || fail "/delete returned $body"
-echo "ok   POST /delete"
+# The PDF is a stub, so OCR fails inside the worker; reaching "done" with a per-file
+# error proves a worker picked the job up, loaded the pipeline, and reported back.
+for _ in $(seq 1 90); do
+  body=$(curl -fsS "$BASE/jobs/$job_id")
+  echo "$body" | grep -q '"status":"\(done\|failed\)"' && break
+  sleep 2
+done
+echo "$body" | grep -q '"status":"done"' || fail "job did not finish: $body"
+echo "$body" | grep -q '"filename":"smoke.json"' || fail "job finished without a result entry: $body"
+echo "ok   job processed by a worker"
 
-code=$(curl -s -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' -d '{"filename":"missing.pdf"}' "$BASE/delete")
-[ "$code" = "404" ] || fail "/delete of missing file returned HTTP $code"
-echo "ok   POST /delete (missing -> 404)"
-
-# Runs the real ocr_pipeline.py inside the container, which proves its imports
-# (PaddleOCR, LangChain, OpenCV) resolve. No OCR text exists yet, so no LLM call is made.
-body=$(curl -fsS -X POST --max-time 300 "$BASE/process") || fail "/process request failed"
-echo "$body" | grep -q '"success":true' || fail "/process returned $body"
-echo "ok   POST /process"
+code=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/jobs/00000000-0000-0000-0000-000000000000")
+[ "$code" = "404" ] || fail "unknown job returned HTTP $code"
+echo "ok   unknown job -> 404"
 
 echo "All smoke tests passed."

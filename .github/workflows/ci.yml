@@ -2,9 +2,9 @@ name: CI/CD
 
 on:
   push:
-    branches: [fastapi, main]
+    branches: [fastapi, worker, main]
   pull_request:
-    branches: [fastapi, main]
+    branches: [fastapi, worker, main]
   workflow_dispatch:
 
 concurrency:
@@ -59,19 +59,19 @@ jobs:
         with:
           context: .
           load: true
-          tags: invoiceai-api:ci
+          tags: invoiceai-api:local
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Smoke test container
-        run: bash scripts/smoke_test.sh invoiceai-api:ci 5000
+      - name: Smoke test full stack (nginx, API replicas, Redis, workers)
+        run: bash scripts/smoke_test.sh 8080
 
       - name: Upload container logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: smoke-container-log
-          path: smoke-container.log
+          name: smoke-compose-log
+          path: smoke-compose.log
           if-no-files-found: ignore
 
       - name: Log in to GHCR

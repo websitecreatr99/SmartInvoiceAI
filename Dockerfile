@@ -1,4 +1,4 @@
-# InvoiceAI backend: FastAPI + PaddleOCR + LangChain extraction pipeline.
+# InvoiceAI backend image, shared by the API and the Celery workers.
 FROM python:3.11-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -18,10 +18,10 @@ COPY requirements.txt setup.py ./
 COPY src ./src
 RUN pip install -r requirements.txt paddlepaddle==3.2.0
 
-COPY app.py ocr_pipeline.py ./
+COPY app.py celery_app.py jobs.py tasks.py ocr_pipeline.py ./
 
 RUN useradd --create-home --uid 1000 appuser \
-    && mkdir -p data output structured_output logs \
+    && mkdir -p storage logs \
     && chown -R appuser:appuser /app
 USER appuser
 
@@ -30,4 +30,5 @@ EXPOSE 5000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/health')"
 
-CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "5000"]
+# Same image runs the workers: override the command with `celery -A celery_app worker`.
+CMD ["sh", "-c", "uvicorn app:app --host 0.0.0.0 --port 5000 --workers ${UVICORN_WORKERS:-2}"]

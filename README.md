@@ -31,38 +31,59 @@ GEMINI_API_KEY=your_api_key_here
 text
 🔑 You can get a Gemini API key from [Google AI Studio](https://aistudio.google.com/).
 
-### 4️⃣ Run the API
-Start the FastAPI server on port 5000 with:
-python app.py
+### 4️⃣ Run the stack
 
-text
+docker compose up -d --build
+
+The app is served through nginx at [http://localhost:8080](http://localhost:8080) (API docs at `/docs`).
 
 ---
 
-### 🐳 Run with Docker
+## ⚖️ Architecture: scaling to many users
 
-docker build -t invoiceai-api .
-docker run -p 5000:5000 --env-file .env -v ./data:/app/data -v ./output:/app/output -v ./structured_output:/app/structured_output invoiceai-api
+OCR and LLM extraction take seconds to minutes per PDF, so they never run inside a web request:
 
-Smoke-test a built image against every endpoint with `bash scripts/smoke_test.sh invoiceai-api`.
+    client ──> nginx (load balancer) ──> API replicas ──> Redis queue ──> Celery workers
+                                              │                              │
+                                              └──── shared storage volume ───┘
+
+- **API** (`app.py`) is stateless: it saves uploads under `storage/jobs/<job_id>/`, queues the job and returns at once. Any replica can answer any request, and each response carries an `X-Served-By` header naming the replica.
+- **Workers** (`tasks.py`) run PDF → images → PaddleOCR → Gemini → validation. Each takes one job at a time, and a job is re-queued if its worker dies.
+- **Each job is isolated** in its own folder, so concurrent users never see each other's files.
+
+Scale each tier independently:
+
+    docker compose up -d --scale api=3 --scale worker=6
+
+| Setting | Default | Meaning |
+|---------|---------|---------|
+| `API_REPLICAS` / `--scale api=N` | 2 | API containers behind nginx |
+| `UVICORN_WORKERS` | 2 | Processes per API container |
+| `WORKER_REPLICAS` / `--scale worker=N` | 2 | Worker containers |
+| `WORKER_CONCURRENCY` | 1 | Jobs per worker container (OCR is CPU/RAM heavy) |
+| `MAX_FILES_PER_JOB` | 20 | Upload limit per job |
+| `JOB_TIME_LIMIT` | 1800 | Seconds before a job is killed |
+
+Put `GEMINI_API_KEY` in `.env`; workers load it automatically.
 
 ### 🧪 Tests & CI/CD
 
-Run the API unit tests with `pip install -r requirements-dev.txt && pytest`.
+Unit tests: `pip install -r requirements-dev.txt && pytest`.
+Full-stack smoke test (nginx, 2 API replicas, Redis, 2 workers): `bash scripts/smoke_test.sh`.
 
-GitHub Actions (`.github/workflows/ci.yml`) runs on pushes and pull requests to `fastapi` and `main`: unit tests → Docker build → container smoke test → publish to `ghcr.io/<owner>/<repo>-api` (pushes only, tagged with branch and commit SHA).
+GitHub Actions (`.github/workflows/ci.yml`) runs on pushes and pull requests to `fastapi`, `worker` and `main`: unit tests → Docker build → full-stack smoke test → publish to `ghcr.io/<owner>/<repo>-api` (pushes only).
 
 ---
 
 ## 🖥️ Usage
-Interactive API docs are at [http://127.0.0.1:5000/docs](http://127.0.0.1:5000/docs). The UI lives on the `frontend` branch and talks to these endpoints:
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| POST | `/upload` | Save PDFs (multipart field `pdfs`) into `data/` |
-| POST | `/delete` | Remove an uploaded PDF (`{"filename": "..."}`) |
-| POST | `/process` | Run the pipeline and return structured JSON for each document |
+| POST | `/jobs` | Upload PDFs (multipart field `pdfs`); returns `202` with a `job_id` |
+| GET | `/jobs/{job_id}` | `queued` → `processing` (with progress) → `done` (with results) or `failed` |
 | GET | `/health` | Liveness check |
+
+Results use the same per-file shape as the old `/process` endpoint: `{"filename", "structured_data"}` or `{"filename", "error"}`.
 
 ---
 
@@ -75,7 +96,11 @@ Interactive API docs are at [http://127.0.0.1:5000/docs](http://127.0.0.1:5000/d
 
 ## 📂 Project Structure
 .
-├── app.py # FastAPI app
+├── app.py # FastAPI API (enqueues jobs)
+├── tasks.py # Celery worker task (OCR + LLM)
+├── celery_app.py # Celery / Redis config
+├── docker-compose.yml # nginx, API, Redis, workers
+├── nginx.conf # Load balancer
 ├── ocr_pipeline.py # OCR + extraction pipeline
 ├── src/ # Pydantic schema, validation, logging
 ├── structured_output/ # Extracted JSON results
