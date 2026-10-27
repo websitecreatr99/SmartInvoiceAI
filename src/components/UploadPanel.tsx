@@ -4,11 +4,12 @@ import { useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { FileText, Loader2, UploadCloud, X, Zap } from "lucide-react";
 import Pipeline from "./Pipeline";
-import type { Stage } from "@/lib/types";
+import type { Failure, Stage } from "@/lib/types";
 
 interface Props {
   files: File[];
   stage: Stage;
+  failure: Failure | null;
   onAdd: (files: File[]) => void;
   onRemove: (index: number) => void;
   onProcess: () => void;
@@ -20,7 +21,7 @@ function formatSize(bytes: number) {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
-export default function UploadPanel({ files, stage, onAdd, onRemove, onProcess }: Props) {
+export default function UploadPanel({ files, stage, failure, onAdd, onRemove, onProcess }: Props) {
   const [dragging, setDragging] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const busy = stage === "upload" || stage === "ocr" || stage === "ai";
@@ -129,9 +130,9 @@ export default function UploadPanel({ files, stage, onAdd, onRemove, onProcess }
       </motion.button>
 
       <AnimatePresence>
-        {stage !== "idle" && stage !== "error" && (
+        {stage !== "idle" && (
           <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }}>
-            <Pipeline stage={stage} />
+            <Pipeline stage={stage} failure={failure} />
           </motion.div>
         )}
       </AnimatePresence>
