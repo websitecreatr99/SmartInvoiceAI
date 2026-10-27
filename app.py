@@ -1,96 +1,115 @@
 import json
 import os
-import subprocess
-import sys
+import socket
+import uuid
 from typing import List
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from celery.result import AsyncResult
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
-from pydantic import BaseModel
 
-UPLOAD_FOLDER = "data"
-STRUCTURED_OUTPUT_FOLDER = "structured_output"
+from celery_app import celery_app
+from jobs import input_dir, job_dir, results_dir
 
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-os.makedirs(STRUCTURED_OUTPUT_FOLDER, exist_ok=True)
+MAX_FILES_PER_JOB = int(os.getenv("MAX_FILES_PER_JOB", "20"))
+HOSTNAME = socket.gethostname()
 
 app = FastAPI(title="InvoiceAI", description="Extract structured data from unstructured invoice PDFs.")
 
-# The Next.js frontend proxies /api/* here, but allow direct calls from its dev server too.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=os.getenv("CORS_ORIGINS", "http://localhost:3000").split(","),
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["X-Served-By"],
 )
 
 
-class DeleteRequest(BaseModel):
-    filename: str
+@app.middleware("http")
+async def served_by(request: Request, call_next):
+    """Tag responses with the replica that handled them, to make load balancing visible."""
+    response = await call_next(request)
+    response.headers["X-Served-By"] = HOSTNAME
+    return response
 
 
-def safe_path(filename: str) -> str:
-    """Keep client-supplied names inside the upload folder."""
-    name = os.path.basename(filename or "")
-    if not name:
-        raise HTTPException(status_code=400, detail="Invalid filename")
-    return os.path.join(UPLOAD_FOLDER, name)
+def check_job_id(job_id: str) -> str:
+    try:
+        uuid.UUID(job_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if not os.path.isdir(job_dir(job_id)):
+        raise HTTPException(status_code=404, detail="Job not found")
+    return job_id
+
+
+def read_results(job_id: str) -> list:
+    """Same per-file shape the old /process endpoint returned."""
+    folder = results_dir(job_id)
+    if not os.path.isdir(folder):
+        return []
+    results = []
+    for filename in sorted(os.listdir(folder)):
+        path = os.path.join(folder, filename)
+        name, ext = os.path.splitext(filename)
+        with open(path, "r", encoding="utf-8") as f:
+            if ext == ".json":
+                results.append({"filename": filename, "structured_data": json.load(f)})
+            elif ext == ".error":
+                results.append({"filename": f"{name}.json", "error": f.read()})
+    return results
 
 
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    return {"status": "ok", "served_by": HOSTNAME}
 
 
-@app.post("/upload")
-def upload_files(pdfs: List[UploadFile] = File(...)):
-    """Save uploaded PDFs into data/ folder"""
-    saved_files = []
+@app.post("/jobs", status_code=202)
+def create_job(pdfs: List[UploadFile] = File(...)):
+    """Store the PDFs under a new job and queue it for the workers."""
+    if len(pdfs) > MAX_FILES_PER_JOB:
+        raise HTTPException(status_code=413, detail=f"At most {MAX_FILES_PER_JOB} files per job")
 
+    job_id = str(uuid.uuid4())
+    os.makedirs(input_dir(job_id))
+
+    saved = []
     for file in pdfs:
-        save_path = safe_path(file.filename)
-        with open(save_path, "wb") as f:
+        name = os.path.basename(file.filename or "")
+        if not name.lower().endswith(".pdf"):
+            continue
+        with open(os.path.join(input_dir(job_id), name), "wb") as f:
             f.write(file.file.read())
-        saved_files.append(os.path.basename(save_path))
+        saved.append(name)
 
-    return {"success": True, "uploaded": saved_files}
+    if not saved:
+        raise HTTPException(status_code=400, detail="No PDF files in upload")
 
-
-@app.post("/delete")
-def delete_file(body: DeleteRequest):
-    """Delete a PDF before processing if user cancels"""
-    file_path = safe_path(body.filename)
-
-    if not os.path.exists(file_path):
-        return JSONResponse(status_code=404, content={"success": False, "error": "File not found"})
-
-    os.remove(file_path)
-    return {"success": True, "deleted": os.path.basename(file_path)}
+    # The task id doubles as the job id so status can be looked up directly.
+    celery_app.send_task("tasks.process_job", args=[job_id], task_id=job_id)
+    return {"job_id": job_id, "status": "queued", "files": saved}
 
 
-@app.post("/process")
-def process_files():
-    """Run OCR pipeline on all uploaded PDFs and return structured JSONs"""
-    results = []
+@app.get("/jobs/{job_id}")
+def get_job(job_id: str):
+    check_job_id(job_id)
+    result = AsyncResult(job_id, app=celery_app)
+    state = result.state
+    info = result.info if isinstance(result.info, dict) else {}
+    total = len(os.listdir(input_dir(job_id)))
 
-    # Sync endpoint, so FastAPI runs this blocking call in its threadpool.
-    try:
-        subprocess.run([sys.executable, "ocr_pipeline.py"], check=True)
-    except subprocess.CalledProcessError as e:
-        return {"success": False, "error": f"OCR pipeline failed: {str(e)}"}
-
-    for filename in os.listdir(STRUCTURED_OUTPUT_FOLDER):
-        if filename.endswith(".json"):
-            file_path = os.path.join(STRUCTURED_OUTPUT_FOLDER, filename)
-            try:
-                with open(file_path, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                results.append({"filename": filename, "structured_data": data})
-            except Exception as e:
-                results.append({"filename": filename, "error": str(e)})
-
-    return {"success": True, "results": results}
+    if state == "SUCCESS":
+        return {"job_id": job_id, "status": "done", "progress": {"done": total, "total": total}, "results": read_results(job_id)}
+    if state == "FAILURE":
+        return {"job_id": job_id, "status": "failed", "error": str(result.info)}
+    if state in ("STARTED", "PROGRESS", "RETRY"):
+        return {
+            "job_id": job_id,
+            "status": "processing",
+            "progress": {"done": info.get("done", 0), "total": total, "current": info.get("current")},
+        }
+    return {"job_id": job_id, "status": "queued", "progress": {"done": 0, "total": total}}
 
 
 if __name__ == "__main__":

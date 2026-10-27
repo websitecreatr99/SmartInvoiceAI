@@ -12,6 +12,7 @@ logs
 data
 output
 structured_output
+storage
 
 # not needed by the API
 research

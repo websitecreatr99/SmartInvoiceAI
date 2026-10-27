@@ -1,5 +1,6 @@
 # API unit tests only need the web stack, not the OCR/LLM dependencies.
 fastapi==0.115.6
 python-multipart==0.0.20
+celery==5.4.0
 httpx==0.28.1
 pytest==8.3.4
