@@ -1,0 +1,9 @@
+Metadata-Version: 2.4
+Name: InvoiceAI
+Version: 0.0.0
+Author: Kishan Pahadiya
+Author-email: kishanvir4321@gmail.com
+License-File: LICENSE
+Dynamic: author
+Dynamic: author-email
+Dynamic: license-file
