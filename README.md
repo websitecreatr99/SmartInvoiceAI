@@ -31,8 +31,8 @@ GEMINI_API_KEY=your_api_key_here
 text
 🔑 You can get a Gemini API key from [Google AI Studio](https://aistudio.google.com/).
 
-### 4️⃣ Run the App
-Start the application with:
+### 4️⃣ Run the API
+Start the FastAPI server on port 5000 with:
 python app.py
 
 text
@@ -40,10 +40,14 @@ text
 ---
 
 ## 🖥️ Usage
-1. Open your browser and go to: [http://127.0.0.1:5000/](http://127.0.0.1:5000/)  
-2. Upload one or more **PDF files**  
-3. Process them and view **extracted JSON schema** in the UI  
-4. Cancel/remove unwanted files before processing  
+Interactive API docs are at [http://127.0.0.1:5000/docs](http://127.0.0.1:5000/docs). The UI lives on the `frontend` branch and talks to these endpoints:
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| POST | `/upload` | Save PDFs (multipart field `pdfs`) into `data/` |
+| POST | `/delete` | Remove an uploaded PDF (`{"filename": "..."}`) |
+| POST | `/process` | Run the pipeline and return structured JSON for each document |
+| GET | `/health` | Liveness check |
 
 ---
 
@@ -56,10 +60,9 @@ text
 
 ## 📂 Project Structure
 .
-├── app.py # Main Flask app
+├── app.py # FastAPI app
 ├── ocr_pipeline.py # OCR + extraction pipeline
-├── static/ # CSS & JS files
-├── templates/ # HTML frontend
+├── src/ # Pydantic schema, validation, logging
 ├── structured_output/ # Extracted JSON results
 ├── requirements.txt # Dependencies
 └── .env # Your Gemini API key
