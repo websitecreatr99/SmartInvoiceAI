@@ -6,19 +6,39 @@ import { FileText, ScanText, Sparkles } from "lucide-react";
 import Background from "@/components/Background";
 import UploadPanel from "@/components/UploadPanel";
 import ResultsPanel from "@/components/ResultsPanel";
-import { processFiles, uploadFiles } from "@/lib/api";
-import type { ResultItem, Stage } from "@/lib/types";
+import { parseExtraction, processFiles, uploadFiles } from "@/lib/api";
+import type { Failure, ResultItem, Stage, StepKey } from "@/lib/types";
 
 // /process runs OCR and LLM extraction in one request, so the OCR → AI hand-off
 // in the stepper is estimated rather than reported by the backend.
 const OCR_ESTIMATE_MS = 8000;
+
+/** Per-document errors only carry a message, so infer which step produced it. */
+function stepForError(message: string): StepKey {
+  return /LLM|Gemini|Validation Error|extraction returned/i.test(message) ? "ai" : "ocr";
+}
+
+/** Summarise per-document failures in a successful response, or null if every document worked. */
+function documentFailure(results: ResultItem[]): Failure | null {
+  const failed = results.filter((r) => r.error || !parseExtraction(r));
+  if (!failed.length) return null;
+  const message = failed[0].error ?? "Unreadable extraction output";
+  return { step: stepForError(message), message, failed: failed.length, total: results.length };
+}
 
 export default function Home() {
   const [files, setFiles] = useState<File[]>([]);
   const [stage, setStage] = useState<Stage>("idle");
   const [results, setResults] = useState<ResultItem[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [failure, setFailure] = useState<Failure | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const currentStep = useRef<StepKey>("upload");
+
+  const goTo = (step: StepKey) => {
+    currentStep.current = step;
+    setStage(step);
+  };
 
   const addFiles = (incoming: File[]) =>
     setFiles((prev) => {
@@ -28,18 +48,22 @@ export default function Home() {
 
   const run = async () => {
     setError(null);
+    setFailure(null);
     try {
-      setStage("upload");
+      goTo("upload");
       await uploadFiles(files);
-      setStage("ocr");
-      timer.current = setTimeout(() => setStage("ai"), OCR_ESTIMATE_MS);
+      goTo("ocr");
+      timer.current = setTimeout(() => goTo("ai"), OCR_ESTIMATE_MS);
       const res = await processFiles();
       clearTimeout(timer.current);
       setResults(res);
+      setFailure(documentFailure(res));
       setStage("done");
     } catch (e) {
       clearTimeout(timer.current);
-      setError(e instanceof Error ? e.message : "Something went wrong");
+      const message = e instanceof Error ? e.message : "Something went wrong";
+      setError(message);
+      setFailure({ step: currentStep.current, message, failed: files.length, total: files.length });
       setStage("error");
     }
   };
@@ -120,6 +144,7 @@ export default function Home() {
             <UploadPanel
               files={files}
               stage={stage}
+              failure={failure}
               onAdd={addFiles}
               onRemove={(i) => setFiles((prev) => prev.filter((_, idx) => idx !== i))}
               onProcess={run}

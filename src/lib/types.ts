@@ -66,3 +66,13 @@ export interface ResultItem {
 }
 
 export type Stage = "idle" | "upload" | "ocr" | "ai" | "done" | "error";
+
+export type StepKey = "upload" | "ocr" | "ai" | "done";
+
+/** Where processing went wrong, for the pipeline stepper. */
+export interface Failure {
+  step: StepKey;
+  message: string;
+  failed: number;
+  total: number;
+}
