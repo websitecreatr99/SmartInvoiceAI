@@ -156,5 +156,5 @@ class Worker:
 
 
 if __name__ == "__main__":
-    telemetry.start(METRICS_PORT)
+    telemetry.start(METRICS_PORT, GEMINI_MODEL)
     Worker().run()

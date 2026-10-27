@@ -34,9 +34,24 @@ LLM_COST = Counter("invoiceai_llm_cost_usd_total", "Estimated LLM spend in USD",
 _langfuse = None
 
 
-def start(metrics_port: int):
+def init_series(model: str):
+    """Export every labelled series at zero, so dashboards show 0 / $0 rather than "No data"
+    before the first PDF or LLM call."""
+    for status in ("ok", "error"):
+        PDFS.labels(status)
+        LLM_CALLS.labels(model, status)
+    for name in ("ocr", "llm", "validate"):
+        STAGE_SECONDS.labels(name)
+    for kind in ("input", "output"):
+        LLM_TOKENS.labels(model, kind)
+    LLM_COST.labels(model)
+    LLM_SECONDS.labels(model)
+
+
+def start(metrics_port: int, model: str):
     """Expose /metrics and connect to Langfuse if configured."""
     global _langfuse
+    init_series(model)
     if metrics_port:
         start_http_server(metrics_port)
         logger.info(f"Prometheus metrics on :{metrics_port}/metrics")
