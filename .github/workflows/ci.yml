@@ -84,6 +84,11 @@ jobs:
           pip install pika==1.3.2
           RABBITMQ_URL=amqp://guest:guest@localhost:5672/%2F python scripts/smoke_test.py
 
+      - name: Metrics endpoint reports the processed PDF
+        run: |
+          curl -fsS localhost:9100/metrics | tee metrics.txt | grep -E '^invoiceai_worker_pdfs_total\{status="error"\} 1\.0$'
+          grep -q '^invoiceai_worker_stage_duration_seconds_count{stage="ocr"}' metrics.txt
+
       - name: Worker logs
         if: always()
         run: docker logs worker 2>&1 | tail -100

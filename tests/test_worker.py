@@ -12,8 +12,9 @@ class FakeModel:
         self.data = data
         self.seen = None
 
-    def extract_with_gemini(self, ocr_text):
+    def extract_with_gemini(self, ocr_text, callbacks=None):
         self.seen = ocr_text
+        self.callbacks = callbacks
         return self.data
 
 

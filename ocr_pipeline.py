@@ -218,8 +218,12 @@ class ModelHandler:
             # # ✅ Parse into Pydantic Extraction object
             # return self.parser.parse(raw_output).dict()
 
-    def extract_with_gemini(self, ocr_text: str) -> Optional[dict]:
-        """Extracts structured data using Gemini models via LangChain + Pydantic parser"""
+    def extract_with_gemini(self, ocr_text: str, callbacks: Optional[list] = None) -> Optional[dict]:
+        """Extracts structured data using Gemini models via LangChain + Pydantic parser.
+
+        `callbacks` are LangChain callback handlers (token/cost metrics, Langfuse tracing).
+        """
+        config = {"callbacks": callbacks or []}
         try:
             gemini_llm = ChatGoogleGenerativeAI(model=self.model)
             
@@ -231,15 +235,15 @@ class ModelHandler:
 
             try:
                 # First attempt with strict parser
-                response = chain.invoke({"ocr_text": ocr_text})
+                response = chain.invoke({"ocr_text": ocr_text}, config=config)
                 logger.info(f"Valid response: {response}")
                 return response.dict()
 
             except Exception as e:
                 # Fallback: get raw text, then repair
                 logger.warning(f"Parsing failed, attempting fixing parser. Error: {e}")
-                raw_output = gemini_llm.invoke(self.prompt_template.format(ocr_text=ocr_text))
-                fixed = fixing_parser.parse(raw_output)
+                raw_output = gemini_llm.invoke(self.prompt_template.format(ocr_text=ocr_text), config=config)
+                fixed = fixing_parser.parse(raw_output.content)
                 logger.info(f"Fixed response: {fixed}")
                 return fixed.dict()
 

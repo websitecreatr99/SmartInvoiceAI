@@ -26,7 +26,9 @@ RUN useradd --create-home --uid 1000 appuser \
     && chown -R appuser:appuser /app
 USER appuser
 
-# No HTTP port: the consumer touches ALIVE_FILE every 15s while connected to RabbitMQ.
+# Prometheus metrics on 9100. Liveness: the consumer touches ALIVE_FILE every 15s while connected to RabbitMQ.
+EXPOSE 9100
+
 HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
     CMD python -c "import os, time, sys; sys.exit(time.time() - os.path.getmtime(os.environ['ALIVE_FILE']) > 60)"
 

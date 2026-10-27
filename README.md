@@ -59,6 +59,16 @@ Kubernetes:
 
 ---
 
+## 📈 Observability
+
+Dashboards, alerts and log collection live on the `tracking` branch. This worker feeds them:
+
+- **Prometheus metrics** on `:9100/metrics` (`METRICS_PORT`, `0` disables): PDFs processed by status, time per PDF and per stage (`ocr`, `llm`, `validate`), PDFs in progress, LLM calls, latency, tokens and estimated USD cost.
+- **Langfuse** (set `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_HOST`): one trace per PDF, grouped into a session per job, with spans for each stage and the Gemini generation including tokens, cost and latency.
+- Cost is estimated from token usage at `LLM_INPUT_USD_PER_1M` / `LLM_OUTPUT_USD_PER_1M` (defaults: Gemini 2.5 Flash list price, $0.30 / $2.50); update them if pricing or the model changes.
+
+---
+
 ## 🧪 Tests & CI/CD
 
 Unit tests (OCR and LLM stubbed): `pip install -r requirements-dev.txt && pytest`.
