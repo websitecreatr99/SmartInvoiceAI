@@ -1,0 +1,74 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: invoiceai-api
+  labels:
+    app: invoiceai-api
+spec:
+  # More than one replica needs a ReadWriteMany volume (EFS, Azure Files, NFS...) for job storage.
+  replicas: 1
+  selector:
+    matchLabels:
+      app: invoiceai-api
+  template:
+    metadata:
+      labels:
+        app: invoiceai-api
+    spec:
+      containers:
+        - name: api
+          image: ghcr.io/kishannextq/hackathon-api:latest
+          ports:
+            - containerPort: 5000
+          env:
+            - name: RABBITMQ_URL
+              valueFrom:
+                secretKeyRef:
+                  name: invoiceai-secrets
+                  key: RABBITMQ_URL
+            - name: STORAGE_DIR
+              value: /app/storage
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 5000
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 5000
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              memory: 512Mi
+          volumeMounts:
+            - name: storage
+              mountPath: /app/storage
+      volumes:
+        - name: storage
+          persistentVolumeClaim:
+            claimName: invoiceai-storage
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: invoiceai-storage
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: invoiceai-api
+spec:
+  selector:
+    app: invoiceai-api
+  ports:
+    - port: 80
+      targetPort: 5000

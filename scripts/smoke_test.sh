@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
-# Start the API image and exercise every endpoint against the running container.
-# Usage: scripts/smoke_test.sh [image] [port]
+# Run the API image against a RabbitMQ and check every endpoint, including a round
+# trip through the queues. Something must consume invoice.jobs (a worker pod or
+# scripts/fake_worker.py).
+# Usage: RABBITMQ_URL=amqp://... scripts/smoke_test.sh [image] [port]
 set -euo pipefail
 
 IMAGE="${1:-invoiceai-api:local}"
 PORT="${2:-5000}"
+RABBITMQ_URL="${RABBITMQ_URL:-amqp://guest:guest@localhost:5672/%2F}"
 NAME="invoiceai-smoke-$$"
 BASE="http://127.0.0.1:${PORT}"
 
@@ -16,45 +19,48 @@ trap cleanup EXIT
 
 fail() {
   echo "FAIL: $1"
-  echo "--- container logs ---"
   docker logs "$NAME" 2>&1 | tail -50 || true
   exit 1
 }
 
-docker run -d --name "$NAME" -p "${PORT}:5000" "$IMAGE" > /dev/null
+docker run -d --name "$NAME" --network host -e RABBITMQ_URL="$RABBITMQ_URL" "$IMAGE" \
+  uvicorn app:app --host 127.0.0.1 --port "$PORT" > /dev/null
 
-echo "Waiting for container to become healthy..."
 for _ in $(seq 1 30); do
-  status=$(docker inspect -f '{{.State.Health.Status}}' "$NAME" 2>/dev/null || echo starting)
-  [ "$status" = "healthy" ] && break
-  [ "$status" = "unhealthy" ] && fail "container reported unhealthy"
-  sleep 2
+  curl -fsS "$BASE/health" > /dev/null 2>&1 && break
+  sleep 1
 done
-[ "$status" = "healthy" ] || fail "container did not become healthy in time"
-echo "ok   container healthy"
-
-body=$(curl -fsS "$BASE/health") || fail "/health request failed"
+body=$(curl -fsS "$BASE/health") || fail "/health unreachable"
 [ "$body" = '{"status":"ok"}' ] || fail "/health returned $body"
 echo "ok   GET /health"
 
 pdf=$(mktemp --suffix=.pdf)
 printf '%%PDF-1.4\n%%%%EOF\n' > "$pdf"
-body=$(curl -fsS -F "pdfs=@${pdf};filename=smoke.pdf" "$BASE/upload") || fail "/upload request failed"
-echo "$body" | grep -q '"uploaded":\["smoke.pdf"\]' || fail "/upload returned $body"
-echo "ok   POST /upload"
 
-body=$(curl -fsS -H 'Content-Type: application/json' -d '{"filename":"smoke.pdf"}' "$BASE/delete") || fail "/delete request failed"
-echo "$body" | grep -q '"deleted":"smoke.pdf"' || fail "/delete returned $body"
-echo "ok   POST /delete"
+body=$(curl -fsS -F "pdfs=@${pdf};filename=gone.pdf" "$BASE/upload") || fail "/upload failed"
+echo "$body" | grep -q '"uploaded":\["gone.pdf"\]' || fail "/upload returned $body"
+body=$(curl -fsS -H 'Content-Type: application/json' -d '{"filename":"gone.pdf"}' "$BASE/delete") || fail "/delete failed"
+echo "$body" | grep -q '"deleted":"gone.pdf"' || fail "/delete returned $body"
+code=$(curl -s -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' -d '{"filename":"gone.pdf"}' "$BASE/delete")
+[ "$code" = "404" ] || fail "second /delete returned HTTP $code"
+echo "ok   POST /upload, /delete"
 
-code=$(curl -s -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' -d '{"filename":"missing.pdf"}' "$BASE/delete")
-[ "$code" = "404" ] || fail "/delete of missing file returned HTTP $code"
-echo "ok   POST /delete (missing -> 404)"
-
-# Runs the real ocr_pipeline.py inside the container, which proves its imports
-# (PaddleOCR, LangChain, OpenCV) resolve. No OCR text exists yet, so no LLM call is made.
-body=$(curl -fsS -X POST --max-time 300 "$BASE/process") || fail "/process request failed"
+curl -fsS -F "pdfs=@${pdf};filename=ui.pdf" "$BASE/upload" > /dev/null
+body=$(curl -fsS -X POST --max-time 120 "$BASE/process") || fail "/process failed"
 echo "$body" | grep -q '"success":true' || fail "/process returned $body"
-echo "ok   POST /process"
+echo "$body" | grep -q '"filename":"ui.json"' || fail "/process missing result: $body"
+echo "ok   POST /process (API -> RabbitMQ -> worker -> RabbitMQ -> API)"
+
+body=$(curl -fsS -F "pdfs=@${pdf};filename=b1.pdf" -F "pdfs=@${pdf};filename=b2.pdf" -F "pdfs=@${pdf};filename=b3.pdf" "$BASE/jobs") \
+  || fail "POST /jobs failed"
+job_id=$(echo "$body" | sed -n 's/.*"job_id":"\([^"]*\)".*/\1/p')
+[ -n "$job_id" ] || fail "POST /jobs returned $body"
+for _ in $(seq 1 60); do
+  body=$(curl -fsS "$BASE/jobs/$job_id")
+  echo "$body" | grep -q '"status":"done"' && break
+  sleep 1
+done
+echo "$body" | grep -q '"done":3,"total":3' || fail "bulk job did not finish: $body"
+echo "ok   POST /jobs + GET /jobs/{id} (3 PDFs)"
 
 echo "All smoke tests passed."
