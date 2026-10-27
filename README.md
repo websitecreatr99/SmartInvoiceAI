@@ -39,6 +39,21 @@ text
 
 ---
 
+### 🐳 Run with Docker
+
+docker build -t invoiceai-api .
+docker run -p 5000:5000 --env-file .env -v ./data:/app/data -v ./output:/app/output -v ./structured_output:/app/structured_output invoiceai-api
+
+Smoke-test a built image against every endpoint with `bash scripts/smoke_test.sh invoiceai-api`.
+
+### 🧪 Tests & CI/CD
+
+Run the API unit tests with `pip install -r requirements-dev.txt && pytest`.
+
+GitHub Actions (`.github/workflows/ci.yml`) runs on pushes and pull requests to `fastapi` and `main`: unit tests → Docker build → container smoke test → publish to `ghcr.io/<owner>/<repo>-api` (pushes only, tagged with branch and commit SHA).
+
+---
+
 ## 🖥️ Usage
 Interactive API docs are at [http://127.0.0.1:5000/docs](http://127.0.0.1:5000/docs). The UI lives on the `frontend` branch and talks to these endpoints:
 
