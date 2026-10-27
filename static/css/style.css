@@ -1,0 +1,188 @@
+/* General Reset */
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+  font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+}
+
+body {
+  background: #f5f7fa;
+  color: #333;
+}
+
+/* Layout */
+.container {
+  display: flex;
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* Sidebar */
+.sidebar {
+  width: 280px;
+  background: linear-gradient(180deg, #1f2937, #111827);
+  color: #fff;
+  padding: 2rem 1rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  box-shadow: 2px 0 15px rgba(0, 0, 0, 0.2);
+}
+
+.logo {
+  font-size: 1.8rem;
+  font-weight: bold;
+  margin-bottom: 2rem;
+  text-align: center;
+  letter-spacing: 1px;
+}
+
+/* Upload Box */
+.upload-box {
+  background: #374151;
+  padding: 1rem;
+  border-radius: 12px;
+  text-align: center;
+  width: 100%;
+  margin-bottom: 2rem;
+  transition: 0.3s;
+}
+
+.upload-box:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
+}
+
+.upload-label {
+  display: block;
+  background: #2563eb;
+  color: #fff;
+  padding: 0.7rem;
+  border-radius: 8px;
+  cursor: pointer;
+  margin-bottom: 1rem;
+  transition: 0.3s;
+  font-weight: 500;
+}
+
+.upload-label:hover {
+  background: #1d4ed8;
+}
+
+.upload-label input {
+  display: none;
+}
+
+.btn-primary {
+  width: 100%;
+  padding: 0.9rem;
+  border: none;
+  border-radius: 10px;
+  background: linear-gradient(90deg, #10b981, #059669);
+  color: white;
+  font-weight: bold;
+  cursor: pointer;
+  transition: 0.3s ease-in-out;
+}
+
+.btn-primary:hover {
+  background: linear-gradient(90deg, #059669, #047857);
+  transform: scale(1.02);
+}
+
+/* Uploaded File List */
+.file-list {
+  width: 100%;
+  margin-top: 1rem;
+}
+
+.file-item {
+  background: #1f2937;
+  color: #f9fafb;
+  padding: 0.6rem 0.8rem;
+  margin-bottom: 0.5rem;
+  border-radius: 8px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  transition: 0.2s;
+}
+
+.file-item:hover {
+  background: #111827;
+}
+
+.file-name {
+  font-size: 0.9rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-remove {
+  background: transparent;
+  border: none;
+  color: #f87171;
+  font-size: 1.1rem;
+  cursor: pointer;
+  transition: 0.3s;
+}
+
+.file-remove:hover {
+  color: #dc2626;
+  transform: scale(1.1);
+}
+
+/* Main Content */
+.content {
+  flex: 1;
+  padding: 2rem;
+  overflow-y: auto;
+}
+
+.content h1 {
+  margin-bottom: 1.5rem;
+  color: #111827;
+  font-size: 1.8rem;
+  font-weight: bold;
+}
+
+/* Results Box */
+.results-box {
+  background: #ffffff;
+  padding: 1.5rem;
+  border-radius: 12px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.1);
+  height: 80%;
+  overflow-y: auto;
+  font-family: "Courier New", monospace;
+  font-size: 0.95rem;
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
+.results-box p {
+  line-height: 1.6;
+}
+
+.placeholder {
+  color: #9ca3af;
+  font-style: italic;
+  text-align: center;
+  margin-top: 2rem;
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #9ca3af;
+  border-radius: 8px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #6b7280;
+}

@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>InvoiceAI</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+  <div class="container">
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <h2 class="logo">📄 InvoiceAI</h2>
+
+      <div class="upload-box">
+        <label for="pdf-upload" class="upload-label">
+          <span>📂 Select PDFs</span>
+          <input type="file" id="pdf-upload" multiple accept=".pdf">
+        </label>
+        
+        <!-- Uploaded Files List -->
+        <div id="file-list" class="file-list"></div>
+
+        <button id="process-btn" class="btn-primary">🚀 Process Files</button>
+      </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="content">
+      <h1>Extracted JSON</h1>
+      <div id="results" class="results-box">
+        <p class="placeholder">Uploaded PDF JSON will appear here...</p>
+      </div>
+    </main>
+  </div>
+
+  <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+</body>
+</html>
