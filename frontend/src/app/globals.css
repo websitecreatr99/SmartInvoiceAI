@@ -1,0 +1,90 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-jetbrains), ui-monospace, monospace;
+
+  --color-ink-950: #05060f;
+  --color-ink-900: #0a0c1b;
+  --color-ink-800: #12152b;
+
+  --animate-float: float 18s ease-in-out infinite;
+  --animate-float-slow: float 26s ease-in-out infinite reverse;
+  --animate-shimmer: shimmer 2.4s linear infinite;
+  --animate-spin-slow: spin 8s linear infinite;
+
+  @keyframes float {
+    0%, 100% { transform: translate(0, 0) scale(1); }
+    33% { transform: translate(6vw, -4vh) scale(1.1); }
+    66% { transform: translate(-4vw, 5vh) scale(0.95); }
+  }
+  @keyframes shimmer {
+    from { background-position: 200% 0; }
+    to { background-position: -200% 0; }
+  }
+}
+
+html { color-scheme: dark; }
+
+body {
+  background: var(--color-ink-950);
+  color: #e6e8f2;
+  font-family: var(--font-sans);
+}
+
+.grad-text {
+  background: linear-gradient(100deg, #a78bfa 0%, #22d3ee 50%, #f472b6 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* Glass card with a soft gradient hairline border */
+.glass {
+  position: relative;
+  background: linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.02));
+  -webkit-backdrop-filter: blur(18px) saturate(140%);
+  backdrop-filter: blur(18px) saturate(140%);
+  border-radius: 1.5rem;
+  box-shadow: 0 30px 80px -30px rgba(0,0,0,0.7), inset 0 1px 0 rgba(255,255,255,0.06);
+}
+.glass::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  padding: 1px;
+  border-radius: inherit;
+  background: linear-gradient(140deg, rgba(167,139,250,0.45), rgba(255,255,255,0.06) 40%, rgba(34,211,238,0.35));
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  pointer-events: none;
+}
+
+.grid-bg {
+  background-image:
+    linear-gradient(rgba(255,255,255,0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,0.035) 1px, transparent 1px);
+  background-size: 56px 56px;
+  -webkit-mask-image: radial-gradient(ellipse at 50% 0%, #000 30%, transparent 75%);
+  mask-image: radial-gradient(ellipse at 50% 0%, #000 30%, transparent 75%);
+}
+
+.shimmer-bg {
+  background: linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.08) 50%, transparent 100%);
+  background-size: 200% 100%;
+}
+
+.scroll-thin { scrollbar-width: thin; scrollbar-color: rgba(167,139,250,0.35) transparent; }
+
+/* JSON syntax colours */
+.json-key { color: #c4b5fd; }
+.json-str { color: #67e8f9; }
+.json-num { color: #fbbf24; }
+.json-bool { color: #f472b6; }
+.json-null { color: #6b7280; font-style: italic; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+}
