@@ -80,6 +80,7 @@ Interactive API docs are at [http://127.0.0.1:5000/docs](http://127.0.0.1:5000/d
 | POST | `/jobs` | **Bulk:** queue PDFs and return `202` with a `job_id` immediately |
 | GET | `/jobs/{job_id}` | `queued` → `processing` (with progress) → `done` with results |
 | GET | `/health` | Liveness check |
+| GET | `/metrics` | Prometheus metrics (requests, latency, jobs, results, job duration) for the `tracking` branch stack |
 
 ---
 

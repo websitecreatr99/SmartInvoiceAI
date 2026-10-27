@@ -40,6 +40,10 @@ class JobStore:
         path = self._dir(job_id)
         return bool(path) and os.path.isfile(os.path.join(path, "meta.json"))
 
+    def created_at(self, job_id: str) -> float:
+        with open(os.path.join(self._dir(job_id), "meta.json"), encoding="utf-8") as f:
+            return json.load(f)["created_at"]
+
     def save_result(self, result: dict) -> bool:
         """Record one worker result. Returns False for unknown jobs."""
         job_id = result.get("job_id")

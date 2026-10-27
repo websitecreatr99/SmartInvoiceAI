@@ -47,3 +47,8 @@ services:
 volumes:
   rabbitmq-data:
   storage:
+
+# Named so the tracking branch's Prometheus/Grafana stack can join and scrape these services.
+networks:
+  default:
+    name: invoiceai
