@@ -1,127 +1,84 @@
-# 📄 Invoice Extractor from Unstructured PDF Data
+# 📄 InvoiceAI Worker
 
-## InvoiceAI (PDF → Unstructured Data Extractor)
-
-InvoiceAI is a lightweight tool that extracts **structured data** (headers, line items, schema) from **unstructured PDFs** using **OCR + AI**.  
-It’s designed for **invoices, purchase orders, and other business documents** where accuracy and structure matter.
+The slow half of InvoiceAI: it takes PDFs off a RabbitMQ queue, runs **OCR (PaddleOCR) + LLM extraction (Gemini)**, validates the result against the invoice schema, and publishes it back. The API that accepts uploads and sends jobs here lives on the `fastapi` branch.
 
 ---
 
-## 🚀 Getting Started
+## ⚖️ How it scales
 
-Follow these steps to set up and run the project locally.
+    fastapi (API) ──publish──> [invoice.jobs] ──> worker pod 1
+                                              ──> worker pod 2      (one PDF per message)
+                                              ──> worker pod N
+    fastapi (API) <──consume── [invoice.results] <── every pod
 
-### 1️⃣ Clone the Repository
+- **Load balancing is done by RabbitMQ.** Every pod consumes from the same queue; each message goes to exactly one pod, and `prefetch=1` means a pod only takes a new PDF once it has finished the last. A bulk upload of 50 PDFs spreads across all available pods instead of queueing behind one.
+- **No work is lost.** A message is acked only after its result is published. If a pod crashes or is scaled down mid-job, RabbitMQ hands the PDF to another pod.
+- **Autoscaling** adds pods while the queue is backed up and removes them when it drains (`k8s/worker-keda.yaml`).
 
-git clone https://github.com/websitecreatr99/InvoiceAI.git
-cd InvoiceAI
+## Message format
 
-text
+Job (`invoice.jobs`), one per PDF:
 
-### 2️⃣ Install Dependencies
-Make sure you have **Python 3.9+** installed. Then run:
-pip install -r requirements.txt
+    {"job_id": "…", "filename": "invoice.pdf", "pdf_b64": "<base64 PDF bytes>"}
 
-text
+Result (`invoice.results`):
 
-### 3️⃣ Create Environment Variables
-Create a `.env` file in the project root and add your **Gemini API Key**:
-GEMINI_API_KEY=your_api_key_here
-
-text
-🔑 You can get a Gemini API key from [Google AI Studio](https://aistudio.google.com/).
-
-### 4️⃣ Run the stack
-
-docker compose up -d --build
-
-The app is served through nginx at [http://localhost:8080](http://localhost:8080) (API docs at `/docs`).
+    {"job_id": "…", "filename": "invoice.pdf", "ok": true,  "structured_data": {"extraction": [...]}}
+    {"job_id": "…", "filename": "invoice.pdf", "ok": false, "error": "…"}
 
 ---
 
-## ⚖️ Architecture: scaling to many users
+## 🚀 Run
 
-OCR and LLM extraction take seconds to minutes per PDF, so they never run inside a web request:
+Locally (needs a RabbitMQ and Python 3.10/3.11):
 
-    client ──> nginx (load balancer) ──> API replicas ──> Redis queue ──> Celery workers
-                                              │                              │
-                                              └──── shared storage volume ───┘
+    pip install -r requirements.txt
+    export RABBITMQ_URL=amqp://guest:guest@localhost:5672/%2F
+    export GOOGLE_API_KEY=your-gemini-key
+    python worker.py
 
-- **API** (`app.py`) is stateless: it saves uploads under `storage/jobs/<job_id>/`, queues the job and returns at once. Any replica can answer any request, and each response carries an `X-Served-By` header naming the replica.
-- **Workers** (`tasks.py`) run PDF → images → PaddleOCR → Gemini → validation. Each takes one job at a time, and a job is re-queued if its worker dies.
-- **Each job is isolated** in its own folder, so concurrent users never see each other's files.
+Docker:
 
-Scale each tier independently:
+    docker build -t invoiceai-worker .
+    docker run -e RABBITMQ_URL=amqp://guest:guest@host.docker.internal:5672/%2F -e GOOGLE_API_KEY=… invoiceai-worker
 
-    docker compose up -d --scale api=3 --scale worker=6
+Kubernetes:
+
+    cp k8s/secret.example.yaml k8s/secret.yaml   # fill in RABBITMQ_URL and GEMINI_API_KEY
+    kubectl apply -f k8s/secret.yaml -f k8s/worker-deployment.yaml
+    kubectl apply -f k8s/worker-keda.yaml        # queue-length autoscaling (needs KEDA)
+    # or: kubectl apply -f k8s/worker-hpa-cpu.yaml   (CPU autoscaling, no KEDA)
 
 | Setting | Default | Meaning |
 |---------|---------|---------|
-| `API_REPLICAS` / `--scale api=N` | 2 | API containers behind nginx |
-| `UVICORN_WORKERS` | 2 | Processes per API container |
-| `WORKER_REPLICAS` / `--scale worker=N` | 2 | Worker containers |
-| `WORKER_CONCURRENCY` | 1 | Jobs per worker container (OCR is CPU/RAM heavy) |
-| `MAX_FILES_PER_JOB` | 20 | Upload limit per job |
-| `JOB_TIME_LIMIT` | 1800 | Seconds before a job is killed |
-
-Put `GEMINI_API_KEY` in `.env`; workers load it automatically.
-
-### 🧪 Tests & CI/CD
-
-Unit tests: `pip install -r requirements-dev.txt && pytest`.
-Full-stack smoke test (nginx, 2 API replicas, Redis, 2 workers): `bash scripts/smoke_test.sh`.
-
-GitHub Actions (`.github/workflows/ci.yml`) runs on pushes and pull requests to `fastapi`, `worker` and `main`: unit tests → Docker build → full-stack smoke test → publish to `ghcr.io/<owner>/<repo>-api` (pushes only).
+| `RABBITMQ_URL` | `amqp://guest:guest@localhost:5672/%2F` | Broker connection |
+| `JOBS_QUEUE` / `RESULTS_QUEUE` | `invoice.jobs` / `invoice.results` | Queue names (must match the API) |
+| `WORKER_PREFETCH` | 1 | PDFs a pod holds at once; keep 1 for even spreading |
+| `GEMINI_MODEL` | `gemini-2.5-flash` | Model used for extraction |
+| `GOOGLE_API_KEY` | – | Gemini API key |
 
 ---
 
-## 🖥️ Usage
+## 🧪 Tests & CI/CD
 
-| Method | Path | Purpose |
-|--------|------|---------|
-| POST | `/jobs` | Upload PDFs (multipart field `pdfs`); returns `202` with a `job_id` |
-| GET | `/jobs/{job_id}` | `queued` → `processing` (with progress) → `done` (with results) or `failed` |
-| GET | `/health` | Liveness check |
+Unit tests (OCR and LLM stubbed): `pip install -r requirements-dev.txt && pytest`.
 
-Results use the same per-file shape as the old `/process` endpoint: `{"filename", "structured_data"}` or `{"filename", "error"}`.
+Smoke test against a live broker and running worker: `python scripts/smoke_test.py`.
 
----
-
-## 📸 Preview Screenshot
-<p align="center">
-  <img src="assets/Screenshot 2025-08-28 125448.png" alt="InvoiceAI Preview" width="700">
-</p>
+GitHub Actions (`.github/workflows/ci.yml`) on `worker`: unit tests → image build → worker container + real RabbitMQ round-trip → publish `ghcr.io/<owner>/<repo>-worker` (pushes only).
 
 ---
 
 ## 📂 Project Structure
-.
-├── app.py # FastAPI API (enqueues jobs)
-├── tasks.py # Celery worker task (OCR + LLM)
-├── celery_app.py # Celery / Redis config
-├── docker-compose.yml # nginx, API, Redis, workers
-├── nginx.conf # Load balancer
-├── ocr_pipeline.py # OCR + extraction pipeline
-├── src/ # Pydantic schema, validation, logging
-├── structured_output/ # Extracted JSON results
-├── requirements.txt # Dependencies
-└── .env # Your Gemini API key
 
-text
-
----
-
-## ✅ Features
-- 📂 Upload multiple PDFs  
-- ❌ Remove unwanted files before processing  
-- 🧾 Extract structured JSON (headers, line items, schema)  
-- 🎨 Simple, modern UI  
+    ├── worker.py            # RabbitMQ consumer
+    ├── ocr_pipeline.py      # PDF → images → PaddleOCR → Gemini
+    ├── src/                 # Pydantic schema, validation, logging
+    ├── k8s/                 # Deployment, KEDA / HPA autoscaling, secret template
+    ├── scripts/smoke_test.py
+    └── tests/
 
 ---
 
 ## 📜 License
-This project is licensed under the **MIT License**.  
-Free to use and modify.
-
----
-
+This project is licensed under the **MIT License**.

@@ -6,21 +6,9 @@ venv
 __pycache__
 *.pyc
 *.egg-info
+.pytest_cache
 logs
-
-# runtime data — mount as volumes instead
-data
-output
-structured_output
-storage
-
-# not needed by the API
-research
-assets
-static
-templates
 tests
-node_modules
-next-env.d.ts
+k8s
+scripts
 public
-frontend

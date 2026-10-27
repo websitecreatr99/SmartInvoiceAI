@@ -1,6 +1,4 @@
-# API unit tests only need the web stack, not the OCR/LLM dependencies.
-fastapi==0.115.6
-python-multipart==0.0.20
-celery==5.4.0
-httpx==0.28.1
+# Unit tests stub out OCR/LLM, so they only need the messaging and schema libraries.
+pika==1.3.2
+pydantic==2.11.7
 pytest==8.3.4
