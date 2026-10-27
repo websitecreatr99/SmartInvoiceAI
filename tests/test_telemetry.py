@@ -129,6 +129,17 @@ def test_langfuse_trace_per_pdf_with_stage_spans(monkeypatch):
     assert "no data" in final[2]["status_message"]
 
 
+def test_series_exported_at_zero_before_any_traffic():
+    telemetry.init_series("never-called-model")
+    assert REGISTRY.get_sample_value("invoiceai_llm_cost_usd_total", {"model": "never-called-model"}) == 0.0
+    assert REGISTRY.get_sample_value(
+        "invoiceai_llm_tokens_total", {"model": "never-called-model", "type": "output"}
+    ) == 0.0
+    assert REGISTRY.get_sample_value(
+        "invoiceai_llm_calls_total", {"model": "never-called-model", "status": "error"}
+    ) == 0.0
+
+
 def test_no_langfuse_means_only_metrics_callback(monkeypatch):
     monkeypatch.setattr(telemetry, "_langfuse", None)
     callbacks = telemetry.llm_callbacks(MODEL)
