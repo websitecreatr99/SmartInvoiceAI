@@ -1,4 +1,3 @@
-import base64
 import json
 import os
 import re
@@ -15,6 +14,7 @@ from pydantic import BaseModel
 
 import broker
 import metrics
+import object_store
 from job_store import JobStore
 
 UPLOAD_FOLDER = "data"
@@ -102,14 +102,19 @@ def submit_job(files: List[Tuple[str, bytes]], endpoint: str, columns: Optional[
     """Create a job and send one message per file to the workers, which process them in parallel."""
     columns = columns or []
     job_id = store.create([name for name, _ in files], columns)
+    try:
+        refs = object_store.file_refs(job_id, files)
+    except object_store.StorageUnavailable as e:
+        store.delete(job_id)
+        raise HTTPException(status_code=503, detail=f"File storage unavailable: {e}")
     messages = [
-        {"job_id": job_id, "filename": name, "file_b64": base64.b64encode(data).decode(), "columns": columns}
-        for name, data in files
+        {"job_id": job_id, "filename": name, **ref, "columns": columns} for (name, _), ref in zip(files, refs)
     ]
     try:
         broker.publish_jobs(messages)
     except AMQPError as e:
         store.delete(job_id)
+        object_store.delete(job_id, [ref["file_key"] for ref in refs if "file_key" in ref])
         metrics.PUBLISH_FAILURES.inc()
         raise HTTPException(status_code=503, detail=f"Job queue unavailable: {e!r}")
     metrics.JOBS_SUBMITTED.labels(endpoint).inc()

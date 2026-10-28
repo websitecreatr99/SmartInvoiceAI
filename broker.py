@@ -1,7 +1,7 @@
 """RabbitMQ plumbing between the API and the worker pods (worker branch).
 
-invoice.jobs     API -> workers, one message per PDF
-invoice.results  workers -> API, one message per processed PDF
+invoice.jobs     API -> workers, one message per document (queues.py has the full topology)
+invoice.results  workers -> API, one message per processed document
 """
 import json
 import logging
@@ -12,11 +12,11 @@ from typing import Callable, List
 import pika
 from pika.exceptions import AMQPError
 
+from queues import JOBS_QUEUE, RESULTS_QUEUE, declare
+
 logger = logging.getLogger("broker")
 
 RABBITMQ_URL = os.getenv("RABBITMQ_URL", "amqp://guest:guest@localhost:5672/%2F")
-JOBS_QUEUE = os.getenv("JOBS_QUEUE", "invoice.jobs")
-RESULTS_QUEUE = os.getenv("RESULTS_QUEUE", "invoice.results")
 
 
 def _params() -> pika.URLParameters:
@@ -26,17 +26,12 @@ def _params() -> pika.URLParameters:
     return params
 
 
-def _declare(channel):
-    channel.queue_declare(queue=JOBS_QUEUE, durable=True)
-    channel.queue_declare(queue=RESULTS_QUEUE, durable=True)
-
-
 def publish_jobs(messages: List[dict]):
     """Publish job messages durably; raises AMQPError if the broker doesn't confirm them."""
     connection = pika.BlockingConnection(_params())
     try:
         channel = connection.channel()
-        _declare(channel)
+        declare(channel)
         channel.confirm_delivery()
         for message in messages:
             channel.basic_publish(
@@ -68,7 +63,7 @@ class ResultConsumer(threading.Thread):
             try:
                 connection = pika.BlockingConnection(_params())
                 channel = connection.channel()
-                _declare(channel)
+                declare(channel)
                 channel.basic_qos(prefetch_count=50)
                 logger.info(f"Consuming results from {RESULTS_QUEUE}")
                 for method, _, body in channel.consume(RESULTS_QUEUE, inactivity_timeout=1):
@@ -77,8 +72,10 @@ class ResultConsumer(threading.Thread):
                     if method is None:
                         continue
                     try:
-                        if not self.on_result(json.loads(body)):
-                            logger.warning(f"Dropped result for unknown job: {body[:200]!r}")
+                        result = json.loads(body)
+                        # Log the job id only: result bodies hold extracted customer data.
+                        if not self.on_result(result):
+                            logger.warning(f"Dropped result for unknown job {result.get('job_id')!r}")
                     except Exception:
                         logger.exception("Failed to store result; dropping it")
                     channel.basic_ack(method.delivery_tag)

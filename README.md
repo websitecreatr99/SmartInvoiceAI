@@ -51,6 +51,8 @@ This branch is the **API**. The slow work (OCR + LLM extraction) runs on the `wo
 
 - Every PDF becomes one message, so a bulk upload fans out across all worker pods; RabbitMQ gives each pod one PDF at a time.
 - Messages are durable and only acknowledged after processing, so a crashed pod's PDF is retried by another.
+- **Files go through object storage, not RabbitMQ.** With `STORAGE_BUCKET` set (S3, or MinIO / GCS / R2 via `S3_ENDPOINT_URL`), uploads are stored at `uploads/<job_id>/<filename>` and messages carry only the key. Without it files travel inline as base64, which is fine for tests and a laptop but makes RabbitMQ hold whole documents in memory. Give the bucket a lifecycle rule that expires `uploads/`.
+- Temporary failures are retried through `invoice.jobs.retry`, and documents that keep crashing workers end up in `invoice.jobs.dlq` with an error result sent back, so every job still finishes. `queues.py` declares this topology and must stay identical to `src/queues.py` on the `worker` branch.
 - The API stays fast and light: it never runs OCR, and its image has no ML dependencies.
 - Job state lives in `STORAGE_DIR`. Running several API replicas requires that directory on shared (ReadWriteMany) storage.
 
@@ -60,6 +62,8 @@ This branch is the **API**. The slow work (OCR + LLM extraction) runs on the `wo
     kubectl apply -f k8s/secret.yaml -f k8s/rabbitmq.yaml -f k8s/api.yaml
 
 Worker Deployment and autoscaling manifests are on the `worker` branch (`k8s/`).
+
+**Upgrading a deployment from before the quorum queue.** RabbitMQ can't change an existing queue's type, and old and new services can't share `invoice.jobs`. Scale the workers to 0, run `RABBITMQ_URL=... python scripts/migrate_queues.py` (it parks queued jobs, recreates the queues and moves the jobs back; safe to re-run), then deploy the new API and worker images. New jobs get a 503 between the migration and the new API rollout.
 
 ### 🧪 Tests & CI/CD
 
@@ -95,10 +99,12 @@ Interactive API docs are at [http://127.0.0.1:5000/docs](http://127.0.0.1:5000/d
 .
 ├── app.py # FastAPI app
 ├── broker.py # RabbitMQ publisher + result consumer
+├── queues.py # Queue topology shared with the worker
+├── object_store.py # Uploads files to the bucket for the workers
 ├── job_store.py # Job state and results on disk
 ├── docker-compose.yml # RabbitMQ + API + worker pods
 ├── k8s/ # RabbitMQ, API, secret template
-├── scripts/ # Container smoke test, fake worker for tests
+├── scripts/ # Container smoke test, fake worker for tests, queue migration
 ├── requirements.txt # Dependencies
 └── .env # Your Gemini API key
 
