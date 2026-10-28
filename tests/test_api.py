@@ -3,9 +3,11 @@ import os
 
 import pytest
 from fastapi.testclient import TestClient
+from botocore.exceptions import EndpointConnectionError
 from pika.exceptions import AMQPConnectionError
 
 import app as app_module
+import object_store
 from job_store import JobStore
 
 
@@ -178,3 +180,54 @@ def test_process_times_out_with_job_id(client, monkeypatch):
 
 def test_process_with_nothing_uploaded(client):
     assert client.post("/process").json() == {"success": False, "error": "No uploaded PDFs to process"}
+
+
+class FakeS3:
+    def __init__(self, fail_after=None):
+        self.objects, self.deleted, self.fail_after = {}, [], fail_after
+
+    def put_object(self, Bucket, Key, Body):
+        if self.fail_after is not None and len(self.objects) >= self.fail_after:
+            raise EndpointConnectionError(endpoint_url="http://s3")
+        self.objects[Key] = Body
+
+    def delete_objects(self, Bucket, Delete):
+        self.deleted += [o["Key"] for o in Delete["Objects"]]
+
+
+@pytest.fixture
+def s3(monkeypatch):
+    fake = FakeS3()
+    monkeypatch.setattr(object_store, "STORAGE_BUCKET", "uploads-bucket")
+    monkeypatch.setattr(object_store, "_s3", lambda: fake)
+    return fake
+
+
+def test_with_a_bucket_messages_carry_object_keys_not_files(client, s3):
+    body = client.post("/jobs", files=[pdf("a.pdf", b"AAA"), pdf("b.pdf", b"BBB")]).json()
+
+    keys = [f"uploads/{body['job_id']}/a.pdf", f"uploads/{body['job_id']}/b.pdf"]
+    assert [m["file_key"] for m in client.published] == keys
+    assert not any("file_b64" in m for m in client.published)
+    assert s3.objects == {keys[0]: b"AAA", keys[1]: b"BBB"}
+
+
+def test_storage_outage_returns_503_and_cleans_up(client, s3, tmp_path):
+    s3.fail_after = 1
+
+    res = client.post("/jobs", files=[pdf("a.pdf"), pdf("b.pdf")])
+
+    assert res.status_code == 503
+    assert client.published == []
+    assert not os.listdir(tmp_path / "storage" / "jobs")
+    assert len(s3.deleted) == 1  # the file uploaded before the outage
+
+
+def test_queue_down_deletes_uploaded_objects(client, s3, monkeypatch):
+    def down(messages):
+        raise AMQPConnectionError("refused")
+
+    monkeypatch.setattr(app_module.broker, "publish_jobs", down)
+
+    assert client.post("/jobs", files=[pdf("a.pdf")]).status_code == 503
+    assert s3.deleted == list(s3.objects)

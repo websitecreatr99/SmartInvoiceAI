@@ -5,6 +5,7 @@ import threading
 import time
 from collections import Counter
 
+import pika
 import pytest
 from fastapi.testclient import TestClient
 
@@ -14,6 +15,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 
 import app as app_module  # noqa: E402
 import fake_worker  # noqa: E402
+import migrate_queues  # noqa: E402
+import queues  # noqa: E402
 from job_store import JobStore  # noqa: E402
 
 
@@ -77,3 +80,27 @@ def test_bulk_job_is_spread_across_workers(stack):
     assert all("structured_data" in r for r in body["results"])
     # prefetch=1 hands each worker one PDF at a time, so all three share the load.
     assert len(handled) == 3, handled
+
+
+def test_migration_keeps_jobs_queued_on_the_old_classic_queue(monkeypatch):
+    name = f"migration-test-{time.time_ns()}"
+    for attr, value in [("JOBS_QUEUE", name), ("RETRY_QUEUE", f"{name}.retry"), ("DEAD_LETTER_QUEUE", f"{name}.dlq")]:
+        monkeypatch.setattr(queues, attr, value)
+    monkeypatch.setattr(migrate_queues, "JOBS_QUEUE", name)
+    monkeypatch.setattr(migrate_queues, "HOLDING_QUEUE", f"{name}.migrating")
+
+    connection = pika.BlockingConnection(pika.URLParameters(os.environ["RABBITMQ_URL"]))
+    channel = connection.channel()
+    channel.queue_declare(name, durable=True)  # the pre-quorum declaration
+    channel.basic_publish("", name, b'{"job_id": "old"}')
+    try:
+        migrate_queues.main()
+        migrate_queues.main()  # re-running is a no-op
+
+        queues.declare(channel)  # would fail with PRECONDITION_FAILED on the old queue
+        method, _, body = channel.basic_get(name, auto_ack=True)
+        assert body == b'{"job_id": "old"}'
+    finally:
+        for queue in (name, f"{name}.retry", f"{name}.dlq", f"{name}.migrating"):
+            channel.queue_delete(queue)
+        connection.close()

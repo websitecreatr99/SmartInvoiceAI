@@ -11,16 +11,16 @@ import time
 
 import pika
 
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+from queues import JOBS_QUEUE, RESULTS_QUEUE, declare  # noqa: E402
+
 RABBITMQ_URL = os.getenv("RABBITMQ_URL", "amqp://guest:guest@localhost:5672/%2F")
-JOBS_QUEUE = os.getenv("JOBS_QUEUE", "invoice.jobs")
-RESULTS_QUEUE = os.getenv("RESULTS_QUEUE", "invoice.results")
 
 
 def serve(stop: threading.Event, name: str = "fake-worker", delay: float = 0.2, on_handled=None):
     connection = pika.BlockingConnection(pika.URLParameters(RABBITMQ_URL))
     channel = connection.channel()
-    channel.queue_declare(queue=JOBS_QUEUE, durable=True)
-    channel.queue_declare(queue=RESULTS_QUEUE, durable=True)
+    declare(channel)
     channel.basic_qos(prefetch_count=1)
 
     for method, _, body in channel.consume(JOBS_QUEUE, inactivity_timeout=0.5):

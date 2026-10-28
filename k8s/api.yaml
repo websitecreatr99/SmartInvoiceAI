@@ -28,6 +28,38 @@ spec:
                   key: RABBITMQ_URL
             - name: STORAGE_DIR
               value: /app/storage
+            # Uploads go to this bucket and jobs carry only the object key. On EKS prefer IRSA
+            # (a service account role) over static AWS keys; S3_ENDPOINT_URL is for MinIO / GCS / R2.
+            - name: STORAGE_BUCKET
+              valueFrom:
+                secretKeyRef:
+                  name: invoiceai-secrets
+                  key: STORAGE_BUCKET
+                  optional: true
+            - name: S3_ENDPOINT_URL
+              valueFrom:
+                secretKeyRef:
+                  name: invoiceai-secrets
+                  key: S3_ENDPOINT_URL
+                  optional: true
+            - name: AWS_REGION
+              valueFrom:
+                secretKeyRef:
+                  name: invoiceai-secrets
+                  key: AWS_REGION
+                  optional: true
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: invoiceai-secrets
+                  key: AWS_ACCESS_KEY_ID
+                  optional: true
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: invoiceai-secrets
+                  key: AWS_SECRET_ACCESS_KEY
+                  optional: true
           readinessProbe:
             httpGet:
               path: /health
