@@ -1,11 +1,13 @@
 # InvoiceAI worker: consumes PDFs from RabbitMQ and runs OCR + LLM extraction.
 FROM python:3.11-slim
 
+# OPENCV_IO_MAX_IMAGE_PIXELS: refuse images over 100 MP instead of allocating gigabytes for one upload.
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    ALIVE_FILE=/tmp/worker-alive
+    ALIVE_FILE=/tmp/worker-alive \
+    OPENCV_IO_MAX_IMAGE_PIXELS=100000000
 
 # poppler-utils: pdf2image; libgl1/libglib2.0-0: OpenCV; libgomp1: PaddlePaddle
 RUN apt-get update \

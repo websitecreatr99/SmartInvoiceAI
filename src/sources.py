@@ -8,7 +8,7 @@ from typing import List, Optional
 
 from pydantic import ValidationError
 
-from .common import ColumnExtraction
+from .common import ColumnExtraction, describe_validation_error
 from .document_reader import Line
 
 # Header fields shown as columns when the user doesn't name their own.
@@ -96,7 +96,7 @@ def column_fields(data: dict, columns: List[str], lines: List[Line]) -> dict:
     try:
         parsed = ColumnExtraction(**data)
     except ValidationError as e:
-        raise ValueError(f"Validation Error: {e}")
+        raise ValueError(f"Validation Error: {describe_validation_error(e)}")
 
     by_key = {c.lower(): c for c in columns}
     rows = []

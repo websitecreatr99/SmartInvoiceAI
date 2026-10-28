@@ -39,6 +39,46 @@ spec:
                   key: GEMINI_API_KEY
             - name: WORKER_PREFETCH
               value: "1"
+            # Jobs carry a file_key into this bucket. On EKS prefer IRSA (a service account role)
+            # over the static AWS keys below; S3_ENDPOINT_URL is for MinIO / GCS interop / R2.
+            - name: STORAGE_BUCKET
+              valueFrom:
+                secretKeyRef:
+                  name: invoiceai-secrets
+                  key: STORAGE_BUCKET
+                  optional: true
+            - name: S3_ENDPOINT_URL
+              valueFrom:
+                secretKeyRef:
+                  name: invoiceai-secrets
+                  key: S3_ENDPOINT_URL
+                  optional: true
+            - name: AWS_REGION
+              valueFrom:
+                secretKeyRef:
+                  name: invoiceai-secrets
+                  key: AWS_REGION
+                  optional: true
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: invoiceai-secrets
+                  key: AWS_ACCESS_KEY_ID
+                  optional: true
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: invoiceai-secrets
+                  key: AWS_SECRET_ACCESS_KEY
+                  optional: true
+            # Per-document limits; keep JOB_TIMEOUT_SECONDS below terminationGracePeriodSeconds
+            # so a scale-down never kills a job that is still within its time budget.
+            - name: MAX_FILE_MB
+              value: "25"
+            - name: MAX_PAGES
+              value: "30"
+            - name: JOB_TIMEOUT_SECONDS
+              value: "540"
             # LLM cost/latency tracing; omit these keys from the secret to disable Langfuse.
             - name: LANGFUSE_PUBLIC_KEY
               valueFrom:

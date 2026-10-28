@@ -148,10 +148,30 @@ from dotenv import load_dotenv
 from functools import lru_cache
 from src.common import ColumnExtraction, DataExtractionHandler, Extraction
 from langchain.output_parsers import OutputFixingParser
+from langchain_core.exceptions import OutputParserException
+from google.api_core import exceptions as google_errors
+from pdf2image import pdfinfo_from_path
+from src.errors import TransientError
 from src.logger_config import setup_logger
 
 logger = setup_logger(__name__)
 load_dotenv()
+
+# Limits that keep one document from exhausting a pod's memory or time.
+MAX_PAGES = int(os.getenv("MAX_PAGES", "30"))
+OCR_DPI = int(os.getenv("OCR_DPI", "300"))
+PDF_PAGE_TIMEOUT_SECONDS = int(os.getenv("PDF_PAGE_TIMEOUT_SECONDS", "120"))
+LLM_TIMEOUT_SECONDS = float(os.getenv("LLM_TIMEOUT_SECONDS", "120"))
+# The Gemini client backs off and retries 429/5xx itself; past that the job is retried from the queue.
+LLM_MAX_RETRIES = int(os.getenv("LLM_MAX_RETRIES", "3"))
+TRANSIENT_LLM_ERRORS = (
+    google_errors.TooManyRequests,  # also ResourceExhausted (quota)
+    google_errors.ServerError,  # 5xx: InternalServerError, ServiceUnavailable, GatewayTimeout
+    google_errors.DeadlineExceeded,
+    google_errors.RetryError,
+    ConnectionError,
+    TimeoutError,
+)
 
 
 class ModelHandler:
@@ -203,9 +223,6 @@ class ModelHandler:
         try:            
             llama_llm = OllamaLLM(model=self.model)
             
-            formatted = self.prompt_template.format_prompt(ocr_text=ocr_text)
-            logger.info(f"Rendered Prompt:\n{formatted.to_string()}")
-
             chain = self.prompt_template | llama_llm | self.parser  # ensures parsing
             
             fixing_parser = OutputFixingParser.from_llm(
@@ -214,7 +231,6 @@ class ModelHandler:
             
             try:
                 response = chain.invoke({"ocr_text": ocr_text})
-                logger.info(f"response: {response}")
                 json_str = re.search(r"\{.*\}", response, re.DOTALL).group(0)  # get JSON only
                 return json.loads(json_str)
                 # fix_response = fixing_parser.parse(response)
@@ -258,32 +274,25 @@ class ModelHandler:
 
     def _invoke_gemini(self, template: PromptTemplate, parser: PydanticOutputParser, inputs: dict,
                        callbacks: Optional[list] = None) -> Optional[dict]:
+        """Raises TransientError when Gemini stays unavailable after the client's own retries.
+
+        Prompts and responses hold customer documents, so only error types are logged.
+        """
         config = {"callbacks": callbacks or []}
         try:
-            gemini_llm = ChatGoogleGenerativeAI(model=self.model)
-
-            formatted = template.format_prompt(**inputs)
-            logger.info(f"Rendered Prompt:\n{formatted.to_string()}")
-
-            chain = template | gemini_llm | parser  # structured pipeline
-            fixing_parser = OutputFixingParser.from_llm(parser=parser, llm=gemini_llm)
-
+            gemini_llm = ChatGoogleGenerativeAI(model=self.model, timeout=LLM_TIMEOUT_SECONDS, max_retries=LLM_MAX_RETRIES)
+            raw_output = (template | gemini_llm).invoke(inputs, config=config).content
             try:
-                # First attempt with strict parser
-                response = chain.invoke(inputs, config=config)
-                logger.info(f"Valid response: {response}")
-                return response.dict()
-
-            except Exception as e:
-                # Fallback: get raw text, then repair
-                logger.warning(f"Parsing failed, attempting fixing parser. Error: {e}")
-                raw_output = gemini_llm.invoke(template.format(**inputs), config=config)
-                fixed = fixing_parser.parse(raw_output.content)
-                logger.info(f"Fixed response: {fixed}")
-                return fixed.dict()
-
+                return parser.parse(raw_output).model_dump()
+            except OutputParserException as e:
+                # Ask the model to repair its own output rather than re-running the whole extraction.
+                logger.warning(f"Parsing failed ({type(e).__name__}), attempting fixing parser")
+                fixing_parser = OutputFixingParser.from_llm(parser=parser, llm=gemini_llm)
+                return fixing_parser.parse(raw_output).model_dump()
+        except TRANSIENT_LLM_ERRORS as e:
+            raise TransientError(f"Gemini unavailable: {type(e).__name__}: {e}") from e
         except Exception as e:
-            logger.error(f"Error during Gemini extraction: {e}", exc_info=True)
+            logger.error(f"Error during Gemini extraction: {type(e).__name__}")
             return None
 
             # raw_output = response.content.strip()
@@ -344,16 +353,23 @@ def pdf_to_images(pdf_path: str, output_root: str = "output") -> List[str]:
     Returns:
         List[str]: List of saved image file paths.
     """
+    page_count = pdfinfo_from_path(pdf_path, timeout=PDF_PAGE_TIMEOUT_SECONDS)["Pages"]
+    if MAX_PAGES and page_count > MAX_PAGES:
+        raise ValueError(f"Document has {page_count} pages; the limit is {MAX_PAGES}")
+
     pdf_name = os.path.splitext(os.path.basename(pdf_path))[0]
     pdf_output_folder = os.path.join(output_root, pdf_name, "images")
     os.makedirs(pdf_output_folder, exist_ok=True)
 
-    pages = convert_from_path(pdf_path, dpi=300)
     image_paths = []
-
-    for i, page in enumerate(pages):
-        img_path = os.path.join(pdf_output_folder, f"page_{i+1}.png")
+    for i in range(1, page_count + 1):
+        # One page at a time: rendering the whole PDF at once holds every page in memory.
+        page = convert_from_path(
+            pdf_path, dpi=OCR_DPI, first_page=i, last_page=i, timeout=PDF_PAGE_TIMEOUT_SECONDS
+        )[0]
+        img_path = os.path.join(pdf_output_folder, f"page_{i}.png")
         page.save(img_path, "PNG")
+        page.close()
         image_paths.append(img_path)
 
     return image_paths

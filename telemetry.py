@@ -1,6 +1,7 @@
 """Worker observability: Prometheus metrics (scraped by the tracking stack) and
 Langfuse traces for LLM cost/latency. Langfuse is enabled only when
-LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY are set.
+LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY are set. Prompts and outputs hold customer
+documents, so Langfuse gets timings, tokens and cost only unless LANGFUSE_CAPTURE_CONTENT=true.
 """
 import os
 import time
@@ -25,6 +26,10 @@ PDF_SECONDS = Histogram("invoiceai_worker_pdf_duration_seconds", "End-to-end tim
 STAGE_SECONDS = Histogram(
     "invoiceai_worker_stage_duration_seconds", "Time per pipeline stage", ["stage"], buckets=DURATION_BUCKETS
 )
+JOBS_RETRIED = Counter("invoiceai_worker_jobs_retried_total", "Jobs requeued after a temporary failure")
+JOBS_DEAD_LETTERED = Counter(
+    "invoiceai_worker_jobs_dead_lettered_total", "Jobs parked in the DLQ after repeatedly crashing or hanging the worker"
+)
 IN_PROGRESS = Gauge("invoiceai_worker_in_progress", "PDFs currently being processed")
 LLM_CALLS = Counter("invoiceai_llm_calls_total", "LLM calls", ["model", "status"])
 LLM_SECONDS = Histogram("invoiceai_llm_latency_seconds", "LLM call latency", ["model"], buckets=DURATION_BUCKETS)
@@ -37,8 +42,9 @@ _langfuse = None
 def init_series(model: str):
     """Export every labelled series at zero, so dashboards show 0 / $0 rather than "No data"
     before the first PDF or LLM call."""
-    for status in ("ok", "error"):
+    for status in ("ok", "error", "retry"):
         PDFS.labels(status)
+    for status in ("ok", "error"):
         LLM_CALLS.labels(model, status)
     for name in ("ocr", "llm", "validate"):
         STAGE_SECONDS.labels(name)
@@ -56,10 +62,16 @@ def start(metrics_port: int, model: str):
         start_http_server(metrics_port)
         logger.info(f"Prometheus metrics on :{metrics_port}/metrics")
     if os.getenv("LANGFUSE_PUBLIC_KEY") and os.getenv("LANGFUSE_SECRET_KEY"):
-        from langfuse import get_client
+        from langfuse import Langfuse
 
-        _langfuse = get_client()
+        capture = os.getenv("LANGFUSE_CAPTURE_CONTENT", "false").lower() == "true"
+        _langfuse = Langfuse(mask=None if capture else redact)
         logger.info(f"Langfuse tracing enabled ({os.getenv('LANGFUSE_HOST', 'https://cloud.langfuse.com')})")
+
+
+def redact(data=None, **kwargs):
+    """Langfuse mask: drop span inputs/outputs (OCR text, prompts, extracted fields)."""
+    return None if data is None else "[redacted]"
 
 
 def shutdown():
@@ -141,11 +153,13 @@ def stage(name: str):
         STAGE_SECONDS.labels(name).observe(time.perf_counter() - started)
 
 
-def record_pdf(ok: bool, seconds: float, span=None, error: Optional[str] = None):
-    PDFS.labels("ok" if ok else "error").inc()
+def record_pdf(status: str, seconds: float, span=None, error: Optional[str] = None):
+    """`status`: ok, error, or retry (failed temporarily and will be tried again)."""
+    PDFS.labels(status).inc()
     PDF_SECONDS.observe(seconds)
     if span is not None:
-        if ok:
+        if status == "ok":
             span.update(output={"ok": True})
         else:
-            span.update(output={"ok": False}, level="ERROR", status_message=error)
+            level = "WARNING" if status == "retry" else "ERROR"
+            span.update(output={"ok": False}, level=level, status_message=error)

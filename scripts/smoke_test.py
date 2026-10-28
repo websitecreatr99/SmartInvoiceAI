@@ -11,15 +11,15 @@ import uuid
 
 import pika
 
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+from src.queues import JOBS_QUEUE, RESULTS_QUEUE, declare  # noqa: E402
+
 URL = os.getenv("RABBITMQ_URL", "amqp://guest:guest@localhost:5672/%2F")
-JOBS_QUEUE = os.getenv("JOBS_QUEUE", "invoice.jobs")
-RESULTS_QUEUE = os.getenv("RESULTS_QUEUE", "invoice.results")
 TIMEOUT = int(os.getenv("SMOKE_TIMEOUT", "300"))
 
 connection = pika.BlockingConnection(pika.URLParameters(URL))
 channel = connection.channel()
-channel.queue_declare(queue=JOBS_QUEUE, durable=True)
-channel.queue_declare(queue=RESULTS_QUEUE, durable=True)
+declare(channel)
 
 job_id = str(uuid.uuid4())
 # A stub PDF: OCR fails on it, so a result with ok=false still proves the worker
