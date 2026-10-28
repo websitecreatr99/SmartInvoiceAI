@@ -164,3 +164,7 @@ cython_debug/
 
 # Real Kubernetes secrets
 k8s/secret.yaml
+.next/
+.venv/
+node_modules/
+.pytest_cache/
