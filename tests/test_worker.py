@@ -3,6 +3,7 @@ import json
 
 import worker
 from src.common import DataExtractionHandler
+from src.document_reader import Line
 
 PDF = base64.b64encode(b"%PDF-1.4 stub").decode()
 
@@ -17,11 +18,16 @@ class FakeModel:
         self.callbacks = callbacks
         return self.data
 
+    def extract_columns(self, ocr_text, columns, callbacks=None):
+        self.seen = ocr_text
+        self.columns = columns
+        return self.data
+
 
 def fake_ocr(path, out_dir):
     with open(path, "rb") as f:
         assert f.read() == b"%PDF-1.4 stub"
-    return [("INVOICE 42", 0.99), ("Qty 5", 0.9)]
+    return [Line(1, "INVOICE 42", 0.99), Line(2, "Qty 5", 0.9)]
 
 
 def test_successful_message_returns_validated_data():
@@ -36,6 +42,42 @@ def test_successful_message_returns_validated_data():
     assert result["filename"] == "a.pdf"
     assert result["structured_data"]["extraction"][0]["header"]["job_number"] == "42"
     assert "INVOICE 42 (conf: 0.99)" in model.seen
+    row = result["fields"]["rows"][0]
+    assert row["Job number"] == {
+        "value": "42",
+        "source": {"page": 1, "line": 1, "text": "INVOICE 42", "confidence": 0.99},
+    }
+    assert row["Vendor"] == {"value": None, "source": None}
+
+
+def test_requested_columns_cite_their_source_line():
+    model = FakeModel({"rows": [
+        {"cells": [{"column": "invoice no", "value": 42, "line": 1}, {"column": "Qty", "value": "5", "line": 99}]},
+        {"cells": [{"column": "Unknown", "value": "x", "line": 1}]},
+    ]})
+
+    result = worker.process_message(
+        {"job_id": "j1", "filename": "a.png", "file_b64": PDF, "columns": [" Invoice No ", "Qty", ""]},
+        model, fake_ocr, DataExtractionHandler(),
+    )
+
+    assert result["ok"] is True
+    assert "structured_data" not in result
+    assert model.columns == ["Invoice No", "Qty"]
+    assert "[L2] (p2) Qty 5" in model.seen
+    assert result["fields"]["columns"] == ["Invoice No", "Qty"]
+    # Cited line out of range: found by matching the value instead. Rows with no requested columns are dropped.
+    assert result["fields"]["rows"] == [{
+        "Invoice No": {"value": "42", "source": {"page": 1, "line": 1, "text": "INVOICE 42", "confidence": 0.99}},
+        "Qty": {"value": "5", "source": {"page": 2, "line": 2, "text": "Qty 5", "confidence": 0.9}},
+    }]
+
+
+def test_document_without_text_is_an_error():
+    result = worker.process_message(
+        {"job_id": "j1", "filename": "a.png", "file_b64": PDF}, FakeModel({}), lambda p, d: [], DataExtractionHandler()
+    )
+    assert result == {"job_id": "j1", "filename": "a.png", "ok": False, "error": "No text found in document"}
 
 
 def test_ocr_failure_becomes_error_result():

@@ -145,7 +145,8 @@ from langchain.prompts import PromptTemplate
 from langchain.output_parsers import PydanticOutputParser
 from langchain_google_genai import ChatGoogleGenerativeAI
 from dotenv import load_dotenv
-from src.common import DataExtractionHandler, Extraction
+from functools import lru_cache
+from src.common import ColumnExtraction, DataExtractionHandler, Extraction
 from langchain.output_parsers import OutputFixingParser
 from src.logger_config import setup_logger
 
@@ -173,6 +174,28 @@ class ModelHandler:
                 """,
                 input_variables=["ocr_text"],
                 partial_variables={"format_instructions": self.parser.get_format_instructions()},
+            )
+
+        # Prompt for user-chosen columns, with a cited source line per value
+        self.columns_parser = PydanticOutputParser(pydantic_object=ColumnExtraction)
+        self.columns_template = PromptTemplate(
+                template="""You extract specific columns from a document. You are a strict JSON generator.
+                Columns to extract:
+                {columns}
+                The document text is given line by line as "[L<n>] (p<page>) <text>".
+                - Return one row per distinct record: one per line item when the columns describe items,
+                  or a single row when they describe the document as a whole.
+                - Each row has one cell per requested column, using the column name exactly as given.
+                - "value" is the value as written in the document, or null if it is not present. Never invent values.
+                - "line" is the <n> of the line the value was read from, or null when value is null.
+                - Output MUST be a single valid JSON object that conforms exactly to this schema:
+                {format_instructions}
+                - Return ONLY JSON.
+                Document text:
+                {ocr_text}
+                """,
+                input_variables=["ocr_text", "columns"],
+                partial_variables={"format_instructions": self.columns_parser.get_format_instructions()},
             )
 
     def extract_with_llama(self, ocr_text: str) -> Optional[dict]:
@@ -223,26 +246,38 @@ class ModelHandler:
 
         `callbacks` are LangChain callback handlers (token/cost metrics, Langfuse tracing).
         """
+        return self._invoke_gemini(self.prompt_template, self.parser, {"ocr_text": ocr_text}, callbacks)
+
+    def extract_columns(self, ocr_text: str, columns: List[str], callbacks: Optional[list] = None) -> Optional[dict]:
+        """Extracts only the user's columns, citing the [L<n>] line each value came from.
+
+        `ocr_text` must be line-numbered (src.sources.numbered_text).
+        """
+        inputs = {"ocr_text": ocr_text, "columns": "\n".join(f"- {c}" for c in columns)}
+        return self._invoke_gemini(self.columns_template, self.columns_parser, inputs, callbacks)
+
+    def _invoke_gemini(self, template: PromptTemplate, parser: PydanticOutputParser, inputs: dict,
+                       callbacks: Optional[list] = None) -> Optional[dict]:
         config = {"callbacks": callbacks or []}
         try:
             gemini_llm = ChatGoogleGenerativeAI(model=self.model)
-            
-            formatted = self.prompt_template.format_prompt(ocr_text=ocr_text)
+
+            formatted = template.format_prompt(**inputs)
             logger.info(f"Rendered Prompt:\n{formatted.to_string()}")
 
-            chain = self.prompt_template | gemini_llm | self.parser  # structured pipeline
-            fixing_parser = OutputFixingParser.from_llm(parser=self.parser, llm=gemini_llm)
+            chain = template | gemini_llm | parser  # structured pipeline
+            fixing_parser = OutputFixingParser.from_llm(parser=parser, llm=gemini_llm)
 
             try:
                 # First attempt with strict parser
-                response = chain.invoke({"ocr_text": ocr_text}, config=config)
+                response = chain.invoke(inputs, config=config)
                 logger.info(f"Valid response: {response}")
                 return response.dict()
 
             except Exception as e:
                 # Fallback: get raw text, then repair
                 logger.warning(f"Parsing failed, attempting fixing parser. Error: {e}")
-                raw_output = gemini_llm.invoke(self.prompt_template.format(ocr_text=ocr_text), config=config)
+                raw_output = gemini_llm.invoke(template.format(**inputs), config=config)
                 fixed = fixing_parser.parse(raw_output.content)
                 logger.info(f"Fixed response: {fixed}")
                 return fixed.dict()
@@ -355,9 +390,28 @@ def preprocess_image(img_path: str) -> str:
     return processed_path
 
 
+def image_to_png(image_path: str, output_root: str = "output") -> str:
+    """Copy an uploaded image (jpg, tiff, ...) to a PNG page so it runs through the same OCR steps as PDF pages."""
+    image = cv2.imread(image_path, cv2.IMREAD_COLOR)
+    if image is None:
+        raise ValueError(f"Could not read image {os.path.basename(image_path)}")
+    name = os.path.splitext(os.path.basename(image_path))[0]
+    folder = os.path.join(output_root, name, "images")
+    os.makedirs(folder, exist_ok=True)
+    png_path = os.path.join(folder, "page_1.png")
+    cv2.imwrite(png_path, image)
+    return png_path
+
+
 # ----------------------------
 # STEP 3: Run PaddleOCR
 # ----------------------------
+@lru_cache(maxsize=1)
+def _ocr_engine() -> PaddleOCR:
+    # Loading the models takes seconds; build once per process instead of once per page.
+    return PaddleOCR(use_textline_orientation=True, lang='en')
+
+
 def run_ocr(image_path: str) -> List[Tuple[str, float]]:
     """
     Run OCR on an image using PaddleOCR.
@@ -368,8 +422,7 @@ def run_ocr(image_path: str) -> List[Tuple[str, float]]:
     Returns:
         List[Tuple[str, float]]: Extracted text with confidence scores.
     """
-    ocr = PaddleOCR(use_textline_orientation=True, lang='en')
-    results = ocr.predict(image_path)
+    results = _ocr_engine().predict(image_path)
 
     extracted = []
     if isinstance(results, list) and "rec_texts" in results[0]:
@@ -414,6 +467,15 @@ def extract_text_from_pdf(pdf_path: str, output_root: str = "output"):
             f.write(f"{text} (conf: {conf})\n")
 
     return all_text
+
+
+def ocr_pages(path: str, output_root: str = "output") -> List[List[Tuple[str, float]]]:
+    """PDF or image → OCR lines for each page, so values can be traced back to their page."""
+    if path.lower().endswith(".pdf"):
+        image_paths = pdf_to_images(path, output_root)
+    else:
+        image_paths = [image_to_png(path, output_root)]
+    return [run_ocr(preprocess_image(img_path)) for img_path in image_paths]
 
 
 if __name__ == "__main__":
