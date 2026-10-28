@@ -4,3 +4,7 @@
 *.tfplan
 crash.log
 terraform.tfvars
+.venv/
+.next/
+node_modules/
+__pycache__/
