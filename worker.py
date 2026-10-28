@@ -1,4 +1,4 @@
-"""RabbitMQ worker: consumes one PDF per message, runs OCR + LLM extraction, publishes the result.
+"""RabbitMQ worker: consumes one document per message, runs OCR + LLM extraction, publishes the result.
 
 Run as many copies (pods) as needed. RabbitMQ hands each message to exactly one
 consumer, and prefetch=1 means a busy pod never holds queued work, so load spreads
@@ -17,7 +17,9 @@ import pika
 from pika.exceptions import AMQPConnectionError
 
 import telemetry
+from src import sources
 from src.common import DataExtractionHandler
+from src.document_reader import read_document
 from src.logger_config import setup_logger
 
 logger = setup_logger(__name__)
@@ -31,37 +33,65 @@ ALIVE_FILE = os.getenv("ALIVE_FILE", os.path.join(tempfile.gettempdir(), "worker
 METRICS_PORT = int(os.getenv("METRICS_PORT", "9100"))
 
 
-def process_message(payload: dict, model_handler, extract_text_from_pdf, handler: DataExtractionHandler) -> dict:
-    """Turn one job message into one result message. Never raises: failures become error results."""
+def requested_columns(payload: dict) -> list:
+    columns = payload.get("columns") or []
+    return [c.strip() for c in columns if isinstance(c, str) and c.strip()]
+
+
+def process_message(payload: dict, model_handler, read_document, handler: DataExtractionHandler) -> dict:
+    """Turn one job message into one result message. Never raises: failures become error results.
+
+    `read_document(path, out_dir)` returns the document's text as src.document_reader.Line objects.
+    With `columns` in the payload only those are extracted; otherwise the invoice schema is used.
+    Either way the result carries `fields`: table rows whose cells cite their source line.
+    """
     job_id = payload.get("job_id")
     filename = os.path.basename(payload.get("filename") or "document.pdf")
+    columns = requested_columns(payload)
     result = {"job_id": job_id, "filename": filename}
     started = time.perf_counter()
     telemetry.IN_PROGRESS.inc()
     with telemetry.trace_pdf(job_id, filename) as span:
         try:
             with tempfile.TemporaryDirectory() as tmp:
-                pdf_path = os.path.join(tmp, filename)
-                with open(pdf_path, "wb") as f:
-                    f.write(base64.b64decode(payload["pdf_b64"]))
+                path = os.path.join(tmp, filename)
+                with open(path, "wb") as f:
+                    # pdf_b64: messages queued by API versions before other file types were accepted.
+                    f.write(base64.b64decode(payload.get("file_b64") or payload["pdf_b64"]))
 
                 with telemetry.stage("ocr"):
-                    ocr_lines = extract_text_from_pdf(pdf_path, tmp)
-                ocr_text = "\n".join(f"{text} (conf: {conf})" for text, conf in ocr_lines)
+                    lines = read_document(path, tmp)
+            if not lines:
+                raise RuntimeError("No text found in document")
 
-            with telemetry.stage("llm"):
-                extracted = model_handler.extract_with_gemini(
-                    ocr_text=ocr_text, callbacks=telemetry.llm_callbacks(GEMINI_MODEL)
+            callbacks = telemetry.llm_callbacks(GEMINI_MODEL)
+            if columns:
+                with telemetry.stage("llm"):
+                    extracted = model_handler.extract_columns(
+                        ocr_text=sources.numbered_text(lines), columns=columns, callbacks=callbacks
+                    )
+                if not extracted:
+                    raise RuntimeError("LLM extraction returned no data")
+                with telemetry.stage("validate"):
+                    fields = sources.column_fields(extracted, columns, lines)
+                result.update(ok=True, fields=fields)
+            else:
+                ocr_text = "\n".join(
+                    line.text if line.confidence is None else f"{line.text} (conf: {line.confidence})"
+                    for line in lines
                 )
-            if not extracted:
-                raise RuntimeError("LLM extraction returned no data")
+                with telemetry.stage("llm"):
+                    extracted = model_handler.extract_with_gemini(ocr_text=ocr_text, callbacks=callbacks)
+                if not extracted:
+                    raise RuntimeError("LLM extraction returned no data")
 
-            with telemetry.stage("validate"):
-                validated = handler.validate_data(extracted)
-            if validated.startswith("Validation Error"):
-                raise RuntimeError(validated)
+                with telemetry.stage("validate"):
+                    validated = handler.validate_data(extracted)
+                if validated.startswith("Validation Error"):
+                    raise RuntimeError(validated)
 
-            result.update(ok=True, structured_data=json.loads(validated))
+                structured = json.loads(validated)
+                result.update(ok=True, structured_data=structured, fields=sources.invoice_fields(structured, lines))
         except Exception as e:
             logger.error(f"Job {job_id}: failed on {filename}: {e}", exc_info=True)
             result.update(ok=False, error=str(e))
@@ -79,10 +109,10 @@ def touch_alive():
 class Worker:
     def __init__(self):
         # Heavy imports (PaddleOCR, LangChain) happen once per process.
-        from ocr_pipeline import ModelHandler, extract_text_from_pdf
+        from ocr_pipeline import ModelHandler, ocr_pages
 
         self.model_handler = ModelHandler(GEMINI_MODEL)
-        self.extract_text_from_pdf = extract_text_from_pdf
+        self.read_document = functools.partial(read_document, ocr_pages=ocr_pages)
         self.handler = DataExtractionHandler()
         self.connection = None
         self.channel = None
@@ -98,7 +128,7 @@ class Worker:
         try:
             payload = json.loads(body)
             logger.info(f"Processing job {payload.get('job_id')} file {payload.get('filename')}")
-            result = process_message(payload, self.model_handler, self.extract_text_from_pdf, self.handler)
+            result = process_message(payload, self.model_handler, self.read_document, self.handler)
         except Exception as e:
             result = {"job_id": None, "filename": None, "ok": False, "error": f"Malformed message: {e}"}
         self.connection.add_callback_threadsafe(functools.partial(self.finish, delivery_tag, result))

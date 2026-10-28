@@ -10,6 +10,7 @@ from prometheus_client import REGISTRY
 import telemetry
 import worker
 from src.common import DataExtractionHandler
+from src.document_reader import Line
 
 PDF = base64.b64encode(b"%PDF-1.4 stub").decode()
 MODEL = "gemini-test"
@@ -30,7 +31,7 @@ class FakeModel:
 
 
 def ocr_ok(path, out):
-    return [("INVOICE", 0.9)]
+    return [Line(1, "INVOICE", 0.9)]
 
 
 def test_successful_pdf_records_metrics():

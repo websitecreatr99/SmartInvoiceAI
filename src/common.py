@@ -1,5 +1,5 @@
 from .logger_config import setup_logger
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, field_validator
 from typing import List, Optional
 
 logger = setup_logger(__name__)
@@ -57,7 +57,28 @@ class ExtractionItem(BaseModel):
 
 class Extraction(BaseModel):
     extraction: List[ExtractionItem] = Field(..., description="List of extracted orders")
-    
+
+
+# Used instead of Extraction when the user names the columns they want.
+
+class Cell(BaseModel):
+    column: str = Field(..., description="Column name, exactly as requested")
+    value: Optional[str] = Field(default=None, description="Value as written in the document, or null if absent")
+    line: Optional[int] = Field(default=None, description="The <n> of the [L<n>] line the value was read from")
+
+    @field_validator("value", mode="before")
+    @classmethod
+    def stringify(cls, v):
+        return None if v is None else str(v)
+
+
+class Row(BaseModel):
+    cells: List[Cell] = Field(..., description="One cell per requested column")
+
+
+class ColumnExtraction(BaseModel):
+    rows: List[Row] = Field(..., description="One row per record found in the document")
+
 
 class DataExtractionHandler:
 
