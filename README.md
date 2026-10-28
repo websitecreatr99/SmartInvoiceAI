@@ -33,7 +33,7 @@ Internet ──► ALB (public subnets) ──► API service :5000 ──┐
 The repositories have to exist and hold an image before the services can start.
 
 ```bash
-cd terraform
+# from the root of this branch (the .tf files live at the top level)
 cp terraform.tfvars.example terraform.tfvars    # edit values
 terraform init
 
@@ -95,3 +95,13 @@ Run Prometheus, Grafana and Langfuse as separate ECS services in the same cluste
   added later.
 - **API replicas:** EFS is shared storage, but keep `api_desired_count = 1` until `job_store` is
   safe with several writers.
+- **Upload bucket (not created yet):** the API and worker now send files through object storage
+  when `STORAGE_BUCKET` is set, and otherwise inline as base64 inside the RabbitMQ message. This
+  Terraform creates no bucket and sets no `STORAGE_BUCKET`, so on ECS whole documents travel
+  through Amazon MQ. To fix it, add an S3 bucket with a lifecycle rule that expires `uploads/`,
+  grant the API task role `s3:PutObject`/`DeleteObject` and the worker task role `s3:GetObject` on
+  it, and set `STORAGE_BUCKET` on both services.
+- **Hung-job timeout vs. stopTimeout:** the worker's `JOB_TIMEOUT_SECONDS` defaults to 540s, which
+  is longer than Fargate's 120s `stopTimeout`. Nothing breaks (the message is redelivered), but a
+  job stopped by a deploy counts towards `MAX_REDELIVERIES`. Consider lowering `OCR_DPI` or setting
+  the worker's limits (`MAX_PAGES`, `JOB_TIMEOUT_SECONDS`) in `services.tf` for this environment.
