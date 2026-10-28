@@ -23,12 +23,12 @@ class JobStore:
             return None
         return os.path.join(self.root, "jobs", str(job_id))
 
-    def create(self, filenames: List[str]) -> str:
+    def create(self, filenames: List[str], columns: Optional[List[str]] = None) -> str:
         job_id = str(uuid.uuid4())
         path = self._dir(job_id)
         os.makedirs(os.path.join(path, "results"))
         with open(os.path.join(path, "meta.json"), "w", encoding="utf-8") as f:
-            json.dump({"job_id": job_id, "files": filenames, "created_at": time.time()}, f)
+            json.dump({"job_id": job_id, "files": filenames, "columns": columns or [], "created_at": time.time()}, f)
         return job_id
 
     def delete(self, job_id: str):
@@ -49,14 +49,16 @@ class JobStore:
         job_id = result.get("job_id")
         if not self.exists(job_id):
             return False
-        stem = os.path.splitext(os.path.basename(result.get("filename") or ""))[0]
-        if not stem:
+        # Full filename, not the stem: a.pdf and a.png in one job are different documents.
+        filename = os.path.basename(result.get("filename") or "")
+        if not filename:
             return False
 
         if result.get("ok"):
-            name, content = f"{stem}.json", json.dumps(result.get("structured_data"), ensure_ascii=False, indent=4)
+            data = {key: result[key] for key in ("structured_data", "fields") if key in result}
+            name, content = f"{filename}.json", json.dumps(data, ensure_ascii=False, indent=4)
         else:
-            name, content = f"{stem}.error", str(result.get("error") or "Unknown error")
+            name, content = f"{filename}.error", str(result.get("error") or "Unknown error")
 
         # Write-then-rename so readers never see a half-written result.
         folder = os.path.join(self._dir(job_id), "results")
@@ -71,20 +73,28 @@ class JobStore:
             return None
         path = self._dir(job_id)
         with open(os.path.join(path, "meta.json"), encoding="utf-8") as f:
-            files = json.load(f)["files"]
+            meta = json.load(f)
+        files = meta["files"]
 
+        # Results come back in upload order as each file finishes, so clients can append them as they arrive.
         results = []
-        for pdf in files:
-            stem = os.path.splitext(pdf)[0]
-            ok_path = os.path.join(path, "results", f"{stem}.json")
-            err_path = os.path.join(path, "results", f"{stem}.error")
+        for name in files:
+            ok_path = os.path.join(path, "results", f"{name}.json")
+            err_path = os.path.join(path, "results", f"{name}.error")
             if os.path.exists(ok_path):
                 with open(ok_path, encoding="utf-8") as f:
-                    results.append({"filename": f"{stem}.json", "structured_data": json.load(f)})
+                    results.append({"filename": name, **json.load(f)})
             elif os.path.exists(err_path):
                 with open(err_path, encoding="utf-8") as f:
-                    results.append({"filename": f"{stem}.json", "error": f.read()})
+                    results.append({"filename": name, "error": f.read()})
 
         done, total = len(results), len(files)
         status = "done" if done == total else "processing" if done else "queued"
-        return {"job_id": job_id, "status": status, "progress": {"done": done, "total": total}, "results": results}
+        return {
+            "job_id": job_id,
+            "status": status,
+            "progress": {"done": done, "total": total},
+            "files": files,
+            "columns": meta.get("columns", []),
+            "results": results,
+        }

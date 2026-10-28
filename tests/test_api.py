@@ -27,9 +27,12 @@ def pdf(name, body=b"%PDF-1.4"):
     return ("pdfs", (name, body, "application/pdf"))
 
 
+FIELDS = {"columns": ["PO number"], "rows": [{"PO number": {"value": "1", "source": {"page": 1, "line": 3, "text": "PO 1", "confidence": 0.9}}}]}
+
+
 def worker_result(job_id, filename, ok=True):
     if ok:
-        return {"job_id": job_id, "filename": filename, "ok": True, "structured_data": {"extraction": []}}
+        return {"job_id": job_id, "filename": filename, "ok": True, "structured_data": {"extraction": []}, "fields": FIELDS}
     return {"job_id": job_id, "filename": filename, "ok": False, "error": "OCR failed"}
 
 
@@ -47,20 +50,62 @@ def test_upload_and_delete(client):
     assert res.json() == {"success": False, "error": "File not found"}
 
 
+def upload(name, body=b"x"):
+    return ("files", (name, body, "application/octet-stream"))
+
+
 def test_create_job_publishes_one_message_per_pdf(client):
-    res = client.post("/jobs", files=[pdf("a.pdf", b"AAA"), pdf("a.pdf", b"BBB"), pdf("notes.txt")])
+    res = client.post("/jobs", files=[pdf("a.pdf", b"AAA"), pdf("a.pdf", b"BBB"), pdf("setup.exe")])
 
     assert res.status_code == 202
     body = res.json()
     assert body["files"] == ["a.pdf", "a (2).pdf"]
-    assert [(m["job_id"], m["filename"], base64.b64decode(m["pdf_b64"])) for m in client.published] == [
-        (body["job_id"], "a.pdf", b"AAA"),
-        (body["job_id"], "a (2).pdf", b"BBB"),
+    assert body["skipped"] == ["setup.exe"]
+    assert [(m["job_id"], m["filename"], base64.b64decode(m["file_b64"]), m["columns"]) for m in client.published] == [
+        (body["job_id"], "a.pdf", b"AAA", []),
+        (body["job_id"], "a (2).pdf", b"BBB", []),
     ]
 
 
+def test_create_job_accepts_images_and_text_with_columns(client):
+    res = client.post(
+        "/jobs",
+        files=[upload("scan.JPG"), upload("a.pdf"), upload("a.png"), upload("notes.txt"), upload("po.docx")],
+        data={"columns": "Invoice number, Total ,\ninvoice NUMBER,"},
+    )
+
+    assert res.status_code == 202
+    body = res.json()
+    assert body["files"] == ["scan.JPG", "a.pdf", "a.png", "notes.txt", "po.docx"]
+    assert body["columns"] == ["Invoice number", "Total"]
+    assert all(m["columns"] == ["Invoice number", "Total"] for m in client.published)
+    assert client.get(f"/jobs/{body['job_id']}").json()["columns"] == ["Invoice number", "Total"]
+
+    res = client.post("/jobs", files=[upload("a.pdf")], data={"columns": '["PO #", "Qty, ordered"]'})
+    assert res.json()["columns"] == ["PO #", "Qty, ordered"]
+
+
+def test_column_validation(client, monkeypatch):
+    assert client.post("/jobs", files=[upload("a.pdf")], data={"columns": '{"a": 1}'}).status_code == 400
+    assert client.post("/jobs", files=[upload("a.pdf")], data={"columns": "x" * 101}).status_code == 400
+    monkeypatch.setattr(app_module, "MAX_COLUMNS", 1)
+    assert client.post("/jobs", files=[upload("a.pdf")], data={"columns": "a,b"}).status_code == 400
+    assert client.published == []
+
+
+def test_same_stem_different_types_keep_separate_results(client):
+    job_id = client.post("/jobs", files=[upload("a.pdf"), upload("a.png")]).json()["job_id"]
+    app_module.store.save_result(worker_result(job_id, "a.png"))
+
+    body = client.get(f"/jobs/{job_id}").json()
+
+    assert body["status"] == "processing"
+    assert body["files"] == ["a.pdf", "a.png"]
+    assert [r["filename"] for r in body["results"]] == ["a.png"]
+
+
 def test_create_job_validation(client, monkeypatch):
-    assert client.post("/jobs", files=[("pdfs", ("x.txt", b"x", "text/plain"))]).status_code == 400
+    assert client.post("/jobs", files=[("pdfs", ("x.exe", b"x", "application/octet-stream"))]).status_code == 400
     monkeypatch.setattr(app_module, "MAX_FILES_PER_JOB", 1)
     assert client.post("/jobs", files=[pdf("a.pdf"), pdf("b.pdf")]).status_code == 413
     monkeypatch.setattr(app_module, "MAX_FILE_MB", 0)
@@ -93,8 +138,8 @@ def test_job_status_lifecycle(client):
     body = client.get(f"/jobs/{job_id}").json()
     assert body["status"] == "done"
     assert body["results"] == [
-        {"filename": "a.json", "structured_data": {"extraction": []}},
-        {"filename": "b.json", "error": "OCR failed"},
+        {"filename": "a.pdf", "structured_data": {"extraction": []}, "fields": FIELDS},
+        {"filename": "b.pdf", "error": "OCR failed"},
     ]
 
 
@@ -117,7 +162,7 @@ def test_process_waits_for_worker_results(client, monkeypatch):
     body = client.post("/process").json()
 
     assert body["success"] is True
-    assert [r["filename"] for r in body["results"]] == ["a.json", "b.json"]
+    assert [r["filename"] for r in body["results"]] == ["a.pdf", "b.pdf"]
     assert os.listdir(app_module.UPLOAD_FOLDER) == []
 
 
