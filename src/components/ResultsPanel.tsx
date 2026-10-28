@@ -2,13 +2,14 @@
 
 import { useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { AlertTriangle, Check, Copy, Download, FileJson, LayoutGrid } from "lucide-react";
+import { AlertTriangle, Check, Copy, Download, FileJson, LayoutGrid, Loader2, Table2 } from "lucide-react";
 import DocumentView from "./DocumentView";
+import FieldsTable, { tableColumns, toCsv } from "./FieldsTable";
 import JsonView from "./JsonView";
 import { parseExtraction } from "@/lib/api";
 import type { ResultItem, Stage } from "@/lib/types";
 
-type View = "visual" | "json";
+type View = "table" | "visual" | "json";
 
 function EmptyState() {
   return (
@@ -36,7 +37,7 @@ function EmptyState() {
         ))}
       </div>
       <h3 className="text-lg font-semibold">Nothing extracted yet</h3>
-      <p className="mt-1 max-w-xs text-sm text-white/50">Add PDFs on the left and hit <b className="text-white/80">Extract data</b>. Results will appear here.</p>
+      <p className="mt-1 max-w-xs text-sm text-white/50">Add documents on the left and hit <b className="text-white/80">Extract data</b>. Results will appear here.</p>
     </div>
   );
 }
@@ -55,107 +56,189 @@ function LoadingState() {
   );
 }
 
-export default function ResultsPanel({ results, stage, error }: { results: ResultItem[]; stage: Stage; error: string | null }) {
-  const [view, setView] = useState<View>("visual");
-  const [active, setActive] = useState(0);
+type Selection = "all" | string;
+
+function FileStatus({ result, busy }: { result: ResultItem | undefined; busy: boolean }) {
+  if (!result) return busy ? <Loader2 className="h-3 w-3 animate-spin text-white/45" /> : null;
+  if (result.error) return <AlertTriangle className="h-3 w-3 text-rose-300" />;
+  return <Check className="h-3 w-3 text-emerald-300" strokeWidth={3} />;
+}
+
+interface Props {
+  results: ResultItem[];
+  /** Every file in the job, in upload order, including ones still processing. */
+  files: string[];
+  /** Columns the user asked for; empty means the default invoice fields. */
+  columns: string[];
+  stage: Stage;
+  error: string | null;
+}
+
+export default function ResultsPanel({ results, files, columns, stage, error }: Props) {
+  const [view, setView] = useState<View>("table");
+  const [active, setActive] = useState<Selection>("all");
   const [copied, setCopied] = useState(false);
 
   const busy = stage === "upload" || stage === "ocr" || stage === "ai";
-  const current = results[Math.min(active, results.length - 1)];
-  const parsed = current ? parseExtraction(current) : null;
-  const payload = parsed ?? current?.structured_data;
+  const byName = new Map(results.map((r) => [r.filename, r]));
+  const names = files.length ? files : results.map((r) => r.filename);
+  const selected = active === "all" || !names.includes(active) ? names : [active];
+  const selectedResults = selected.map((n) => byName.get(n)).filter((r): r is ResultItem => !!r);
+  const tableCols = tableColumns(selectedResults, columns);
+
+  // The visual layout is for the invoice schema; with custom columns the table is the visual.
+  const hasVisual = results.some((r) => parseExtraction(r));
+  const views: View[] = hasVisual ? ["table", "visual", "json"] : ["table", "json"];
+  const shownView = views.includes(view) ? view : "table";
+
+  const jsonPayload = () => {
+    const items = selectedResults.map((r) => ({ ...r, structured_data: parseExtraction(r) ?? r.structured_data }));
+    return active === "all" ? items : items[0];
+  };
+  const exportText = () => (shownView === "table" ? toCsv(selectedResults, tableCols) : JSON.stringify(jsonPayload(), null, 2));
 
   const copy = async () => {
-    await navigator.clipboard.writeText(JSON.stringify(payload, null, 2));
+    await navigator.clipboard.writeText(exportText());
     setCopied(true);
     setTimeout(() => setCopied(false), 1500);
   };
 
   const download = () => {
-    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const csv = shownView === "table";
+    const blob = new Blob([exportText()], { type: csv ? "text/csv" : "application/json" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
-    a.download = current.filename.endsWith(".json") ? current.filename : `${current.filename}.json`;
+    a.download = `${active === "all" ? "extraction" : active}.${csv ? "csv" : "json"}`;
     a.click();
     URL.revokeObjectURL(a.href);
   };
 
+  const done = names.filter((n) => byName.has(n)).length;
+
   return (
     <section className="glass flex min-h-[600px] flex-col p-6">
       <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
-        <h2 className="text-lg font-semibold tracking-tight">Extracted results</h2>
+        <div>
+          <h2 className="text-lg font-semibold tracking-tight">Extracted results</h2>
+          {names.length > 0 && (
+            <p className="text-xs text-white/45">
+              {done}/{names.length} files {busy ? "done · results appear as each file finishes" : "processed"}
+            </p>
+          )}
+        </div>
         <div className="flex items-center gap-2">
-          {current && !busy && (
+          {selectedResults.length > 0 && (
             <>
               <button onClick={copy} className="flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-xs font-medium text-white/70 transition hover:bg-white/10 hover:text-white">
                 {copied ? <Check className="h-3.5 w-3.5 text-emerald-300" /> : <Copy className="h-3.5 w-3.5" />}
                 {copied ? "Copied" : "Copy"}
               </button>
               <button onClick={download} className="flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-xs font-medium text-white/70 transition hover:bg-white/10 hover:text-white">
-                <Download className="h-3.5 w-3.5" /> Download
+                <Download className="h-3.5 w-3.5" /> {shownView === "table" ? "CSV" : "JSON"}
               </button>
             </>
           )}
           <div className="relative flex rounded-xl border border-white/10 bg-white/5 p-1">
-            {(["visual", "json"] as const).map((v) => (
-              <button
-                key={v}
-                onClick={() => setView(v)}
-                className={`relative z-10 flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors ${view === v ? "text-white" : "text-white/50 hover:text-white/80"}`}
-              >
-                {view === v && (
-                  <motion.span layoutId="view-pill" className="absolute inset-0 -z-10 rounded-lg bg-gradient-to-r from-violet-500/80 to-cyan-500/80" />
-                )}
-                {v === "visual" ? <LayoutGrid className="h-3.5 w-3.5" /> : <FileJson className="h-3.5 w-3.5" />}
-                {v === "visual" ? "Visual" : "JSON"}
-              </button>
-            ))}
+            {views.map((v) => {
+              const Icon = v === "table" ? Table2 : v === "visual" ? LayoutGrid : FileJson;
+              return (
+                <button
+                  key={v}
+                  onClick={() => setView(v)}
+                  className={`relative z-10 flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors ${shownView === v ? "text-white" : "text-white/50 hover:text-white/80"}`}
+                >
+                  {shownView === v && (
+                    <motion.span layoutId="view-pill" className="absolute inset-0 -z-10 rounded-lg bg-gradient-to-r from-violet-500/80 to-cyan-500/80" />
+                  )}
+                  <Icon className="h-3.5 w-3.5" />
+                  {v === "table" ? "Table" : v === "visual" ? "Visual" : "JSON"}
+                </button>
+              );
+            })}
           </div>
         </div>
       </div>
 
-      {results.length > 1 && !busy && (
+      {names.length > 1 && (
         <div className="scroll-thin mb-5 flex gap-2 overflow-x-auto pb-1">
-          {results.map((r, i) => (
+          {(["all", ...names] as Selection[]).map((n) => (
             <button
-              key={r.filename}
-              onClick={() => setActive(i)}
-              className={`shrink-0 rounded-full border px-4 py-1.5 text-xs font-medium transition ${
-                i === active ? "border-violet-400/60 bg-violet-500/20 text-white" : "border-white/10 bg-white/[0.03] text-white/55 hover:text-white"
+              key={n}
+              onClick={() => setActive(n)}
+              className={`flex shrink-0 items-center gap-1.5 rounded-full border px-4 py-1.5 text-xs font-medium transition ${
+                n === active || (n === "all" && !names.includes(active))
+                  ? "border-violet-400/60 bg-violet-500/20 text-white"
+                  : "border-white/10 bg-white/[0.03] text-white/55 hover:text-white"
               }`}
             >
-              {r.filename.replace(/\.json$/, "")}
+              {n === "all" ? `All files (${names.length})` : (
+                <>
+                  <FileStatus result={byName.get(n)} busy={busy} /> {n}
+                </>
+              )}
             </button>
           ))}
         </div>
       )}
 
+      {error && names.length > 0 && (
+        <p className="mb-4 flex items-center gap-2 rounded-xl border border-rose-400/30 bg-rose-500/10 p-3 text-sm text-rose-200">
+          <AlertTriangle className="h-4 w-4 shrink-0" /> {error}
+        </p>
+      )}
+
       <div className="flex-1">
         <AnimatePresence mode="wait">
           <motion.div
-            key={busy ? "loading" : error ? "error" : current ? `${active}-${view}` : "empty"}
+            key={!names.length ? (busy ? "loading" : error ? "error" : "empty") : `${active}-${shownView}`}
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -10 }}
             transition={{ duration: 0.25 }}
             className="h-full"
           >
-            {busy ? (
-              <LoadingState />
-            ) : error ? (
-              <div className="flex min-h-[420px] flex-col items-center justify-center text-center">
-                <span className="mb-4 grid h-14 w-14 place-items-center rounded-2xl bg-rose-500/15 text-rose-300"><AlertTriangle className="h-7 w-7" /></span>
-                <h3 className="font-semibold">Extraction failed</h3>
-                <p className="mt-1 max-w-md text-sm text-white/50">{error}</p>
-              </div>
-            ) : !current ? (
-              <EmptyState />
-            ) : current.error ? (
-              <p className="rounded-xl border border-rose-400/30 bg-rose-500/10 p-4 text-sm text-rose-200">{current.error}</p>
-            ) : view === "json" || !parsed ? (
-              <JsonView data={payload} />
+            {!names.length ? (
+              busy ? (
+                <LoadingState />
+              ) : error ? (
+                <div className="flex min-h-[420px] flex-col items-center justify-center text-center">
+                  <span className="mb-4 grid h-14 w-14 place-items-center rounded-2xl bg-rose-500/15 text-rose-300"><AlertTriangle className="h-7 w-7" /></span>
+                  <h3 className="font-semibold">Extraction failed</h3>
+                  <p className="mt-1 max-w-md text-sm text-white/50">{error}</p>
+                </div>
+              ) : (
+                <EmptyState />
+              )
+            ) : shownView === "table" ? (
+              <FieldsTable names={selected} results={byName} columns={tableCols} busy={busy} />
+            ) : shownView === "json" ? (
+              selectedResults.length ? <JsonView data={jsonPayload()} /> : <LoadingState />
             ) : (
-              <DocumentView data={parsed} />
+              <div className="space-y-10">
+                {selected.map((name) => {
+                  const r = byName.get(name);
+                  const parsed = r ? parseExtraction(r) : null;
+                  return (
+                    <div key={name} className="space-y-4">
+                      {selected.length > 1 && (
+                        <div className="flex items-center gap-3">
+                          <span className="font-mono text-sm font-semibold text-violet-300">{name}</span>
+                          <span className="h-px flex-1 bg-gradient-to-r from-violet-400/40 to-transparent" />
+                        </div>
+                      )}
+                      {!r ? (
+                        busy ? <div className="h-32 rounded-2xl bg-white/[0.04] shimmer-bg animate-shimmer" /> : <p className="text-sm text-white/35">No result</p>
+                      ) : r.error ? (
+                        <p className="rounded-xl border border-rose-400/30 bg-rose-500/10 p-4 text-sm text-rose-200">{r.error}</p>
+                      ) : parsed ? (
+                        <DocumentView data={parsed} />
+                      ) : (
+                        <JsonView data={r} />
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
             )}
           </motion.div>
         </AnimatePresence>
