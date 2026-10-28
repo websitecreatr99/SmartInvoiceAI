@@ -2,7 +2,7 @@
 
 import { motion } from "framer-motion";
 import { AlertTriangle, Check, CloudUpload, ScanText, Sparkles, Braces, X } from "lucide-react";
-import type { Failure, Stage, StepKey } from "@/lib/types";
+import type { Failure, Progress, Stage, StepKey } from "@/lib/types";
 
 const STEPS = [
   { key: "upload", label: "Upload", hint: "Sending files to the server", icon: CloudUpload },
@@ -39,7 +39,7 @@ const BADGE: Record<StepStatus, string> = {
   partial: "border-transparent bg-amber-400 text-ink-950 shadow-lg shadow-amber-400/30",
 };
 
-export default function Pipeline({ stage, failure }: { stage: Stage; failure: Failure | null }) {
+export default function Pipeline({ stage, failure, progress }: { stage: Stage; failure: Failure | null; progress: Progress | null }) {
   return (
     <ol className="relative mt-6 space-y-1">
       {STEPS.map((step, i) => {
@@ -52,7 +52,9 @@ export default function Pipeline({ stage, failure }: { stage: Stage; failure: Fa
             : failure!.message
           : status === "skipped"
             ? "Skipped"
-            : step.hint;
+            : status === "active" && step.key !== "upload" && progress?.total
+              ? `${progress.done} of ${progress.total} files done`
+              : step.hint;
 
         return (
           <li

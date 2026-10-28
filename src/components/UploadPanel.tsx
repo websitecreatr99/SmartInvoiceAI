@@ -2,17 +2,99 @@
 
 import { useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { FileText, Loader2, UploadCloud, X, Zap } from "lucide-react";
+import { Columns3, File as FileIcon, FileCode, FileImage, FileSpreadsheet, FileText, Loader2, UploadCloud, X, Zap } from "lucide-react";
 import Pipeline from "./Pipeline";
-import type { Failure, Stage } from "@/lib/types";
+import { ACCEPTED_EXTENSIONS, isSupported } from "@/lib/api";
+import type { Failure, Progress, Stage } from "@/lib/types";
 
 interface Props {
   files: File[];
+  columns: string[];
   stage: Stage;
   failure: Failure | null;
+  progress: Progress | null;
   onAdd: (files: File[]) => void;
+  onColumnsChange: (columns: string[]) => void;
   onRemove: (index: number) => void;
   onProcess: () => void;
+}
+
+const FILE_KINDS = [
+  { test: /\.pdf$/i, icon: FileText, tint: "bg-rose-500/15 text-rose-300" },
+  { test: /\.(png|jpe?g|tiff?|bmp|webp)$/i, icon: FileImage, tint: "bg-cyan-500/15 text-cyan-300" },
+  { test: /\.(csv|tsv)$/i, icon: FileSpreadsheet, tint: "bg-emerald-500/15 text-emerald-300" },
+  { test: /\.(json|xml|html?)$/i, icon: FileCode, tint: "bg-amber-500/15 text-amber-300" },
+];
+
+function fileKind(name: string) {
+  return FILE_KINDS.find((k) => k.test.test(name)) ?? { icon: FileIcon, tint: "bg-violet-500/15 text-violet-300" };
+}
+
+/** Optional column names as removable chips; Enter or comma adds, pasting a list adds them all. */
+function ColumnsInput({ columns, disabled, onChange }: { columns: string[]; disabled: boolean; onChange: (c: string[]) => void }) {
+  const [draft, setDraft] = useState("");
+
+  const add = (raw: string) => {
+    const seen = new Set(columns.map((c) => c.toLowerCase()));
+    const next = [...columns];
+    for (const name of raw.split(/[,\n]/).map((c) => c.trim())) {
+      if (name && !seen.has(name.toLowerCase())) {
+        seen.add(name.toLowerCase());
+        next.push(name.slice(0, 100));
+      }
+    }
+    onChange(next);
+    setDraft("");
+  };
+
+  return (
+    <div className="mt-5">
+      <label htmlFor="columns" className="mb-2 flex items-center gap-1.5 text-sm font-medium">
+        <Columns3 className="h-4 w-4 text-cyan-300" /> Columns to extract
+        <span className="text-xs font-normal text-white/40">optional</span>
+      </label>
+      <div
+        className={`flex flex-wrap gap-1.5 rounded-xl border border-white/10 bg-white/[0.03] p-2 transition focus-within:border-violet-400/60 ${
+          disabled ? "opacity-60" : ""
+        }`}
+      >
+        {columns.map((c) => (
+          <span key={c} className="flex items-center gap-1 rounded-lg bg-violet-500/20 py-1 pl-2.5 pr-1 text-xs font-medium text-violet-100">
+            {c}
+            <button
+              type="button"
+              disabled={disabled}
+              onClick={() => onChange(columns.filter((x) => x !== c))}
+              aria-label={`Remove column ${c}`}
+              className="grid h-4 w-4 place-items-center rounded text-violet-200/70 hover:bg-white/10 hover:text-white"
+            >
+              <X className="h-3 w-3" />
+            </button>
+          </span>
+        ))}
+        <input
+          id="columns"
+          value={draft}
+          disabled={disabled}
+          onChange={(e) => (/[,\n]/.test(e.target.value) ? add(e.target.value) : setDraft(e.target.value))}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              add(draft);
+            } else if (e.key === "Backspace" && !draft && columns.length) {
+              onChange(columns.slice(0, -1));
+            }
+          }}
+          onBlur={() => draft.trim() && add(draft)}
+          placeholder={columns.length ? "Add another…" : "e.g. Invoice number, Total, Due date"}
+          className="min-w-[8rem] flex-1 bg-transparent px-1.5 py-1 text-sm outline-none placeholder:text-white/30"
+        />
+      </div>
+      <p className="mt-1.5 text-xs text-white/40">
+        {columns.length ? "Only these columns are extracted from every document." : "Leave empty to extract the standard invoice fields."}
+      </p>
+    </div>
+  );
 }
 
 function formatSize(bytes: number) {
@@ -21,15 +103,18 @@ function formatSize(bytes: number) {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
-export default function UploadPanel({ files, stage, failure, onAdd, onRemove, onProcess }: Props) {
+export default function UploadPanel({ files, columns, stage, failure, progress, onAdd, onColumnsChange, onRemove, onProcess }: Props) {
   const [dragging, setDragging] = useState(false);
+  const [rejected, setRejected] = useState<string[]>([]);
   const inputRef = useRef<HTMLInputElement>(null);
   const busy = stage === "upload" || stage === "ocr" || stage === "ai";
 
   const accept = (list: FileList | null) => {
     if (!list) return;
-    const pdfs = Array.from(list).filter((f) => f.type === "application/pdf" || f.name.toLowerCase().endsWith(".pdf"));
-    if (pdfs.length) onAdd(pdfs);
+    const all = Array.from(list);
+    setRejected(all.filter((f) => !isSupported(f)).map((f) => f.name));
+    const supported = all.filter(isSupported);
+    if (supported.length) onAdd(supported);
   };
 
   return (
@@ -67,15 +152,16 @@ export default function UploadPanel({ files, stage, failure, onAdd, onRemove, on
         >
           <UploadCloud className="h-8 w-8 text-white" />
         </motion.div>
-        <p className="font-semibold">{dragging ? "Release to add" : "Drag & drop PDFs here"}</p>
+        <p className="font-semibold">{dragging ? "Release to add" : "Drag & drop documents here"}</p>
         <p className="mt-1 text-sm text-white/50">
           or <span className="font-medium text-cyan-300 underline-offset-4 group-hover:underline">browse files</span> · multiple allowed
         </p>
+        <p className="mt-2 text-xs text-white/35">PDF, images, Word, CSV, text, HTML</p>
         <input
           ref={inputRef}
           type="file"
           multiple
-          accept=".pdf,application/pdf"
+          accept={ACCEPTED_EXTENSIONS.join(",")}
           className="hidden"
           onChange={(e) => {
             accept(e.target.files);
@@ -84,9 +170,17 @@ export default function UploadPanel({ files, stage, failure, onAdd, onRemove, on
         />
       </motion.button>
 
+      {rejected.length > 0 && (
+        <p className="mt-3 rounded-lg border border-amber-300/20 bg-amber-300/[0.06] px-3 py-2 text-xs text-amber-200/80">
+          Unsupported, not added: {rejected.join(", ")}
+        </p>
+      )}
+
       <ul className="scroll-thin mt-4 max-h-56 space-y-2 overflow-y-auto pr-1">
         <AnimatePresence initial={false}>
-          {files.map((file, i) => (
+          {files.map((file, i) => {
+            const { icon: Icon, tint } = fileKind(file.name);
+            return (
             <motion.li
               key={`${file.name}-${file.size}-${file.lastModified}`}
               layout
@@ -95,8 +189,8 @@ export default function UploadPanel({ files, stage, failure, onAdd, onRemove, on
               exit={{ opacity: 0, x: 16, height: 0, marginTop: 0 }}
               className="flex items-center gap-3 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2.5"
             >
-              <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-rose-500/15 text-rose-300">
-                <FileText className="h-4 w-4" />
+              <span className={`grid h-9 w-9 shrink-0 place-items-center rounded-lg ${tint}`}>
+                <Icon className="h-4 w-4" />
               </span>
               <div className="min-w-0 flex-1">
                 <p className="truncate text-sm font-medium">{file.name}</p>
@@ -112,9 +206,12 @@ export default function UploadPanel({ files, stage, failure, onAdd, onRemove, on
                 <X className="h-4 w-4" />
               </button>
             </motion.li>
-          ))}
+            );
+          })}
         </AnimatePresence>
       </ul>
+
+      <ColumnsInput columns={columns} disabled={busy} onChange={onColumnsChange} />
 
       <motion.button
         type="button"
@@ -132,7 +229,7 @@ export default function UploadPanel({ files, stage, failure, onAdd, onRemove, on
       <AnimatePresence>
         {stage !== "idle" && (
           <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }}>
-            <Pipeline stage={stage} failure={failure} />
+            <Pipeline stage={stage} failure={failure} progress={progress} />
           </motion.div>
         )}
       </AnimatePresence>

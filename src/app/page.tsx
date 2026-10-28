@@ -2,16 +2,22 @@
 
 import { useRef, useState } from "react";
 import { motion } from "framer-motion";
-import { FileText, ScanText, Sparkles } from "lucide-react";
+import { FileText, Quote, ScanText, Sparkles } from "lucide-react";
 import Background from "@/components/Background";
 import UploadPanel from "@/components/UploadPanel";
 import ResultsPanel from "@/components/ResultsPanel";
-import { parseExtraction, processFiles, uploadFiles } from "@/lib/api";
-import type { Failure, ResultItem, Stage, StepKey } from "@/lib/types";
+import { createJob, getJob, parseExtraction } from "@/lib/api";
+import type { Failure, Progress, ResultItem, Stage, StepKey } from "@/lib/types";
 
-// /process runs OCR and LLM extraction in one request, so the OCR → AI hand-off
+// Workers run OCR and LLM extraction back to back, so the OCR → AI hand-off
 // in the stepper is estimated rather than reported by the backend.
 const OCR_ESTIMATE_MS = 8000;
+const POLL_MS = 1500;
+const POLL_TIMEOUT_MS = 15 * 60 * 1000;
+// Ride out brief network or proxy hiccups while polling.
+const MAX_POLL_ERRORS = 3;
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /** Per-document errors only carry a message, so infer which step produced it. */
 function stepForError(message: string): StepKey {
@@ -20,7 +26,7 @@ function stepForError(message: string): StepKey {
 
 /** Summarise per-document failures in a successful response, or null if every document worked. */
 function documentFailure(results: ResultItem[]): Failure | null {
-  const failed = results.filter((r) => r.error || !parseExtraction(r));
+  const failed = results.filter((r) => r.error || (!r.fields && !parseExtraction(r)));
   if (!failed.length) return null;
   const message = failed[0].error ?? "Unreadable extraction output";
   return { step: stepForError(message), message, failed: failed.length, total: results.length };
@@ -28,8 +34,13 @@ function documentFailure(results: ResultItem[]): Failure | null {
 
 export default function Home() {
   const [files, setFiles] = useState<File[]>([]);
+  const [columns, setColumns] = useState<string[]>([]);
   const [stage, setStage] = useState<Stage>("idle");
   const [results, setResults] = useState<ResultItem[]>([]);
+  // Names the server gave each file (deduplicated), in upload order, and the columns the job ran with.
+  const [jobFiles, setJobFiles] = useState<string[]>([]);
+  const [jobColumns, setJobColumns] = useState<string[]>([]);
+  const [progress, setProgress] = useState<Progress | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [failure, setFailure] = useState<Failure | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
@@ -46,17 +57,40 @@ export default function Home() {
       return [...prev, ...incoming.filter((f) => !seen.has(`${f.name}:${f.size}`))];
     });
 
+  /** Poll the job, appending each file's result as soon as its worker finishes. */
+  const waitForJob = async (jobId: string) => {
+    const deadline = Date.now() + POLL_TIMEOUT_MS;
+    let errors = 0;
+    while (Date.now() < deadline) {
+      try {
+        const job = await getJob(jobId);
+        errors = 0;
+        setResults(job.results);
+        setProgress(job.progress);
+        if (job.status === "done") return job.results;
+      } catch (e) {
+        if (++errors >= MAX_POLL_ERRORS) throw e;
+      }
+      await sleep(POLL_MS);
+    }
+    throw new Error(`Still processing after ${POLL_TIMEOUT_MS / 60000} minutes (job ${jobId})`);
+  };
+
   const run = async () => {
     setError(null);
     setFailure(null);
+    setResults([]);
+    setProgress(null);
     try {
       goTo("upload");
-      await uploadFiles(files);
+      const job = await createJob(files, columns);
+      setJobFiles(job.files);
+      setJobColumns(columns);
+      setProgress({ done: 0, total: job.files.length });
       goTo("ocr");
       timer.current = setTimeout(() => goTo("ai"), OCR_ESTIMATE_MS);
-      const res = await processFiles();
+      const res = await waitForJob(job.job_id);
       clearTimeout(timer.current);
-      setResults(res);
       setFailure(documentFailure(res));
       setStage("done");
     } catch (e) {
@@ -97,7 +131,7 @@ export default function Home() {
             animate={{ opacity: 1, y: 0 }}
             className="inline-flex items-center gap-2 rounded-full border border-violet-400/30 bg-violet-500/10 px-4 py-1.5 text-xs font-semibold tracking-wide text-violet-200"
           >
-            <Sparkles className="h-3.5 w-3.5" /> Unstructured PDFs → clean JSON
+            <Sparkles className="h-3.5 w-3.5" /> PDFs, scans & docs → clean data
           </motion.span>
           <motion.h1
             initial={{ opacity: 0, y: 20 }}
@@ -113,8 +147,8 @@ export default function Home() {
             transition={{ delay: 0.2, duration: 0.6 }}
             className="mt-5 text-base text-white/55 sm:text-lg"
           >
-            Drop purchase orders, invoices or work orders. We OCR every page, extract headers and line items with AI,
-            and hand back validated JSON.
+            Drop purchase orders, invoices or any document, as many as you like. Each file is processed in parallel, and
+            every value comes back with the exact line it was read from.
           </motion.p>
           <motion.div
             initial={{ opacity: 0 }}
@@ -126,6 +160,7 @@ export default function Home() {
               { icon: ScanText, label: "PaddleOCR text recognition" },
               { icon: Sparkles, label: "LLM field extraction" },
               { icon: FileText, label: "Pydantic-validated schema" },
+              { icon: Quote, label: "Source line for every value" },
             ].map(({ icon: Icon, label }) => (
               <span key={label} className="flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5">
                 <Icon className="h-3.5 w-3.5 text-cyan-300" /> {label}
@@ -143,14 +178,17 @@ export default function Home() {
           <div className="lg:sticky lg:top-6">
             <UploadPanel
               files={files}
+              columns={columns}
               stage={stage}
               failure={failure}
+              progress={progress}
               onAdd={addFiles}
+              onColumnsChange={setColumns}
               onRemove={(i) => setFiles((prev) => prev.filter((_, idx) => idx !== i))}
               onProcess={run}
             />
           </div>
-          <ResultsPanel results={results} stage={stage} error={error} />
+          <ResultsPanel results={results} files={jobFiles} columns={jobColumns} stage={stage} error={error} />
         </motion.div>
       </main>
     </>
