@@ -1,0 +1,25 @@
+# Copy to terraform.tfvars and adjust. terraform.tfvars is git-ignored.
+
+aws_region  = "ap-south-1"
+environment = "prod"
+
+# Commit SHAs already pushed to ECR (see README: bootstrap order).
+api_image_tag    = "0000000000000000000000000000000000000000"
+worker_image_tag = "0000000000000000000000000000000000000000"
+
+cors_origins    = "https://app.example.com"
+certificate_arn = "" # arn:aws:acm:ap-south-1:123456789012:certificate/...
+
+api_desired_count = 1
+worker_min_count  = 1
+worker_max_count  = 20
+worker_use_spot   = false
+
+mq_instance_type   = "mq.m5.large"
+mq_deployment_mode = "SINGLE_INSTANCE" # CLUSTER_MULTI_AZ for HA
+
+enable_langfuse           = false
+enable_managed_prometheus = false
+
+github_repo                 = "kishannextq/hackathon"
+create_github_oidc_provider = true
