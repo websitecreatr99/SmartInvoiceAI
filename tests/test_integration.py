@@ -63,7 +63,7 @@ def test_process_round_trip(stack):
     body = client.post("/process").json()
 
     assert body["success"] is True
-    assert body["results"][0]["filename"] == "a.json"
+    assert body["results"][0]["filename"] == "a.pdf"
 
 
 def test_bulk_job_is_spread_across_workers(stack):
