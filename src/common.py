@@ -80,6 +80,14 @@ class ColumnExtraction(BaseModel):
     rows: List[Row] = Field(..., description="One row per record found in the document")
 
 
+def describe_validation_error(e: ValidationError) -> str:
+    """Field paths and reasons only: pydantic's default message echoes the (customer) input values."""
+    return "; ".join(
+        f"{'.'.join(str(part) for part in err['loc']) or 'root'}: {err['msg']}"
+        for err in e.errors(include_input=False, include_url=False)
+    )
+
+
 class DataExtractionHandler:
 
     def validate_data(self, data: dict) -> str:
@@ -98,8 +106,9 @@ class DataExtractionHandler:
             logger.info("Data validation successful.")
             return parsed_data.model_dump_json(indent=4)
         except ValidationError as e:
-            logger.error(f"Validation Error: {e}")
-            return f"Validation Error: {e}"
+            message = f"Validation Error: {describe_validation_error(e)}"
+            logger.error(message)
+            return message
 
     def save_json_to_file(self, json_data: str, filename: str):
         """

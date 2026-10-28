@@ -145,3 +145,8 @@ def test_no_langfuse_means_only_metrics_callback(monkeypatch):
     monkeypatch.setattr(telemetry, "_langfuse", None)
     callbacks = telemetry.llm_callbacks(MODEL)
     assert len(callbacks) == 1 and isinstance(callbacks[0], telemetry.UsageCallback)
+
+
+def test_langfuse_mask_drops_document_content():
+    assert telemetry.redact(data={"ocr_text": "ACME invoice"}) == "[redacted]"
+    assert telemetry.redact(data=None) is None
