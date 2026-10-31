@@ -1,6 +1,8 @@
 import type { Extraction, JobStatus, ResultItem } from "./types";
 
-// Requests go through the /api rewrite in next.config.ts to the FastAPI app.
+// Requests go through the /api rewrite in next.config.ts to the FastAPI app, unless NEXT_PUBLIC_API_URL
+// points the browser straight at a deployed API (which must list this site in its CORS_ORIGINS).
+const API_URL = (process.env.NEXT_PUBLIC_API_URL ?? "/api").replace(/\/$/, "");
 
 /** Mirrors SUPPORTED_EXTENSIONS in the API: PDFs and images are OCR'd, the rest read as text. */
 export const ACCEPTED_EXTENSIONS = [
@@ -23,13 +25,13 @@ export async function createJob(files: File[], columns: string[]): Promise<{ job
   const form = new FormData();
   files.forEach((f) => form.append("files", f));
   if (columns.length) form.append("columns", JSON.stringify(columns));
-  const res = await fetch("/api/jobs", { method: "POST", body: form });
+  const res = await fetch(`${API_URL}/jobs`, { method: "POST", body: form });
   if (!res.ok) throw new Error(await errorMessage(res, "Upload failed"));
   return res.json();
 }
 
 export async function getJob(jobId: string): Promise<JobStatus> {
-  const res = await fetch(`/api/jobs/${jobId}`, { cache: "no-store" });
+  const res = await fetch(`${API_URL}/jobs/${jobId}`, { cache: "no-store" });
   if (!res.ok) throw new Error(await errorMessage(res, "Status check failed"));
   return res.json();
 }
