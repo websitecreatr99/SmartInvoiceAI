@@ -1,0 +1,84 @@
+# Whole InvoiceAI stack on one Oracle Cloud Always Free VM (Ampere A1, arm64).
+# setup.sh clones each branch into ~/invoiceai, so build contexts are ../../<dir>:
+#   ~/invoiceai/infra    (this folder is infra/oracle)
+#   ~/invoiceai/api      (fastapi branch)
+#   ~/invoiceai/worker   (worker branch)
+#   ~/invoiceai/frontend (frontend branch)
+# Only Caddy publishes ports (80/443); RabbitMQ, the API and the workers stay on the internal network.
+services:
+  caddy:
+    image: caddy:2-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN:?set DOMAIN in .env}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - frontend
+      - api
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ../../frontend
+      dockerfile: ../infra/oracle/frontend.Dockerfile
+      args:
+        BACKEND_URL: http://api:5000
+    environment:
+      BACKEND_URL: http://api:5000
+    restart: unless-stopped
+
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    environment:
+      RABBITMQ_DEFAULT_USER: invoiceai
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:?set RABBITMQ_PASSWORD in .env}
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  api:
+    build: ../../api
+    environment:
+      RABBITMQ_URL: amqp://invoiceai:${RABBITMQ_PASSWORD}@rabbitmq:5672/%2F
+      STORAGE_DIR: /app/storage
+      CORS_ORIGINS: https://${DOMAIN}
+    volumes:
+      - storage:/app/storage
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    restart: unless-stopped
+
+  worker:
+    build: ../../worker
+    environment:
+      RABBITMQ_URL: amqp://invoiceai:${RABBITMQ_PASSWORD}@rabbitmq:5672/%2F
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:?set GOOGLE_API_KEY in .env}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash}
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    deploy:
+      replicas: ${WORKER_REPLICAS:-2}
+    restart: unless-stopped
+
+volumes:
+  caddy-data:
+  caddy-config:
+  rabbitmq-data:
+  storage:
+
+# Same network name as the fastapi branch's compose, so the tracking branch's Prometheus/Grafana stack can join.
+networks:
+  default:
+    name: invoiceai
