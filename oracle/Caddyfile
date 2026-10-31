@@ -1,0 +1,24 @@
+# Automatic HTTPS (Let's Encrypt) for $DOMAIN, e.g. 129-146-12-34.sslip.io.
+{$DOMAIN} {
+	encode gzip
+
+	# The browser only needs the async job endpoints. /metrics, /upload, /delete and the
+	# blocking /process stay unreachable from the internet.
+	handle_path /api/* {
+		@public path /jobs /jobs/* /health
+		handle @public {
+			reverse_proxy api:5000
+		}
+		handle {
+			respond 404
+		}
+	}
+
+	handle {
+		reverse_proxy frontend:3000
+	}
+
+	request_body {
+		max_size 100MB
+	}
+}
