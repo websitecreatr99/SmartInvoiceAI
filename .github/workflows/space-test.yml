@@ -1,0 +1,48 @@
+name: Hugging Face Space test
+
+# Builds the exact image deploy.sh pushes to the Space, runs it the way Spaces do (uid 1000, one
+# container) and sends a sample invoice through RabbitMQ -> worker -> API.
+# Without a GOOGLE_API_KEY secret the run still proves the pipeline (the worker answers with an
+# error result); with it, extraction itself must succeed.
+on:
+  push:
+    branches: [infra]
+    paths: ["huggingface/**", ".github/workflows/space-test.yml"]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  space:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch the fastapi and worker branches
+        run: git fetch --no-tags origin fastapi:refs/remotes/origin/fastapi worker:refs/remotes/origin/worker
+
+      - name: Assemble the Space
+        run: bash huggingface/build.sh "$RUNNER_TEMP/space" && find "$RUNNER_TEMP/space" -type f | sort
+
+      - name: Build image
+        run: docker build -t invoiceai-space "$RUNNER_TEMP/space"
+
+      - name: Run like a Space
+        env:
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+        run: docker run -d --name space --user 1000 -p 5000:5000 -e GOOGLE_API_KEY invoiceai-space
+
+      - name: Send a sample invoice through the pipeline
+        env:
+          REQUIRE_OK: ${{ secrets.GOOGLE_API_KEY != '' && '1' || '0' }}
+        run: |
+          git show "origin/fastapi:data/46500152___20240912_060559-redacted.pdf" > "$RUNNER_TEMP/invoice.pdf"
+          printf 'Invoice 1042\nVendor: Acme Ltd\nDate: 2024-09-12\nTotal: 118.00 USD\n' > "$RUNNER_TEMP/invoice.txt"
+          bash huggingface/smoke_test.sh http://localhost:5000 "$RUNNER_TEMP/invoice.pdf" "$RUNNER_TEMP/invoice.txt"
+
+      - name: Container logs
+        if: always()
+        run: docker logs space 2>&1 | tail -300
