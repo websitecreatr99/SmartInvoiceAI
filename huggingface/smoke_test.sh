@@ -17,7 +17,14 @@ echo "health: $(curl -fsS "$url/health")"
 
 args=()
 for f in "$@"; do args+=(-F "files=@$f"); done
-job=$(curl -fsS "${args[@]}" "$url/jobs" | python3 -c 'import json,sys; print(json.load(sys.stdin)["job_id"])')
+# /health doesn't check RabbitMQ, which starts a few seconds after the API; until then uploads get 503.
+for i in $(seq 1 30); do
+  code=$(curl -sS -o /tmp/smoke_job.json -w '%{http_code}' "${args[@]}" "$url/jobs")
+  [ "$code" = 202 ] && break
+  [ "$code" = 503 ] && [ "$i" -lt 30 ] || { echo "upload failed: HTTP $code $(cat /tmp/smoke_job.json)"; exit 1; }
+  sleep 5
+done
+job=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["job_id"])' /tmp/smoke_job.json)
 echo "job: $job"
 
 deadline=$(( $(date +%s) + TIMEOUT ))
