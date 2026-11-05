@@ -146,6 +146,7 @@ from langchain.output_parsers import PydanticOutputParser
 from langchain_google_genai import ChatGoogleGenerativeAI
 from dotenv import load_dotenv
 from functools import lru_cache
+from concurrent.futures import ThreadPoolExecutor
 from src.common import ColumnExtraction, DataExtractionHandler, Extraction
 from langchain.output_parsers import OutputFixingParser
 from langchain_core.exceptions import OutputParserException
@@ -428,6 +429,12 @@ def _ocr_engine() -> PaddleOCR:
     return PaddleOCR(use_textline_orientation=True, lang='en')
 
 
+# Paddle's inference predictors only work on the thread that created them, and worker.py runs each job
+# on a new thread: the first job succeeded and every later one failed with "std::exception".
+# All OCR therefore runs on this one long-lived thread.
+_OCR_THREAD = ThreadPoolExecutor(max_workers=1, thread_name_prefix="paddleocr")
+
+
 def run_ocr(image_path: str) -> List[Tuple[str, float]]:
     """
     Run OCR on an image using PaddleOCR.
@@ -438,7 +445,7 @@ def run_ocr(image_path: str) -> List[Tuple[str, float]]:
     Returns:
         List[Tuple[str, float]]: Extracted text with confidence scores.
     """
-    results = _ocr_engine().predict(image_path)
+    results = _OCR_THREAD.submit(lambda: _ocr_engine().predict(image_path)).result()
 
     extracted = []
     if isinstance(results, list) and "rec_texts" in results[0]:
