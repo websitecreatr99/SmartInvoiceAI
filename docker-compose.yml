@@ -25,6 +25,8 @@ services:
     environment:
       RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/%2F
       STORAGE_DIR: /app/storage
+      # Keyless requests use the workers' GOOGLE_API_KEY from .env; set to 1 to answer them with sample data.
+      DEMO_WITHOUT_KEY: ${DEMO_WITHOUT_KEY:-0}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
       STORAGE_BUCKET: ${STORAGE_BUCKET:-}
       S3_ENDPOINT_URL: ${S3_ENDPOINT_URL:-}

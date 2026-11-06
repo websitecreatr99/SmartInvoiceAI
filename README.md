@@ -15,6 +15,182 @@ This is the **`lite` branch**: the `fastapi` branch's API plus a copy of the wor
 
 **Live:** frontend https://hackathon-frontend-gamma-seven.vercel.app, backend https://hackathon-elnx.onrender.com (`/health`, `/docs`). The backend sleeps when idle, so the first request can take up to a minute.
 
+To run your own copy online for free, see [Deploy your own copy for free](#deploy-your-own-copy-for-free-render--vercel). To run it on your machine, see [Getting Started](#-getting-started).
+
+---
+
+## Deploy your own copy for free (Render + Vercel)
+
+This puts the whole system online at no cost and needs no credit card:
+- **Backend on Render:** the `lite` branch. It is the API and the worker in one service, with Gemini reading the documents, so there is no RabbitMQ and no PaddleOCR. It uses about 110 MB of RAM.
+- **Frontend on Vercel:** the `frontend` branch.
+
+The browser only ever talks to Vercel, which forwards `/api/*` to Render.
+
+    Browser ──► Vercel (frontend branch) ──/api/*──► Render (lite branch: API + worker) ──► Gemini API
+
+It takes about 20 minutes. The Render build takes 5–10 of those.
+
+### What you need
+
+| Account / tool | Used for | Card needed? |
+|---|---|---|
+| GitHub account | Render and Vercel deploy from your own copy of the repo | No |
+| [Google AI Studio](https://aistudio.google.com/apikey) API key | Gemini: reads the documents and extracts the data | No (free tier) |
+| [Render](https://render.com) account (sign in with GitHub) | Backend | No (free web service) |
+| [Vercel](https://vercel.com) account (sign in with GitHub) | Frontend | No (Hobby plan) |
+| Git, and Node.js 20+ for the Vercel CLI | Copying the repo, deploying the frontend | – |
+| [UptimeRobot](https://uptimerobot.com) account (optional) | Keeping the free backend awake | No |
+
+### Step 1: Put a copy of the repo in your GitHub account
+
+Render and Vercel can only deploy repositories your GitHub account can see.
+
+1. On GitHub, create an **empty** repository: no README, no .gitignore, no license. In these steps it's called `invoiceai`.
+2. Copy every branch into it:
+
+       git clone --bare https://github.com/kishannextq/hackathon.git
+       cd hackathon.git
+       git push --mirror https://github.com/<your-user>/invoiceai.git
+       cd .. && rm -rf hackathon.git
+
+3. Optionally, in your repo's **Settings → General → Default branch**, choose `fastapi`.
+
+If you were added to this repository, a fork also works: **Fork**, with "Copy the main branch only" **unchecked**, so you get `lite` and `frontend`.
+
+### Step 2: Create a Gemini API key
+
+1. Open https://aistudio.google.com/apikey and choose **Create API key**. **Create API key in new project** gives the key its own free quota.
+2. Copy the key; you'll paste it into Render in the next step.
+
+The service uses two models: `gemini-3.5-flash-lite` for extraction and `gemini-3.1-flash-lite` for reading the document. Each has its own free daily quota. Every document costs one request of each.
+- Gemini 2.5 models are closed to new keys, so don't switch to them.
+- `gemini-3.5-flash` extracts a bit better, but its free tier allowed only 20 requests a day.
+
+### Step 3: Deploy the backend on Render
+
+1. Sign in to https://dashboard.render.com with GitHub.
+2. When asked, let Render's GitHub app access your `invoiceai` repo. You can change this later under **Account settings → Git providers**.
+3. Create the service. Use the Blueprint if your account has it; otherwise set it up by hand.
+
+   **A. Blueprint (if your dashboard has New → Blueprint):** choose **New → Blueprint**, then your repo and branch **`lite`**. Render reads `render.yaml` and asks for `GOOGLE_API_KEY`. Paste the key, then click **Apply**.
+
+   **B. By hand (if there's no Blueprint option):** choose **New → Web Service**, pick your repo, and fill in:
+
+   | Field | Value |
+   |---|---|
+   | Branch | `lite` |
+   | Language / Runtime | `Docker` |
+   | Dockerfile Path | `./Dockerfile.lite` |
+   | Docker Build Context | `.` |
+   | Instance Type | **Free** |
+   | Health Check Path (under Advanced) | `/health` |
+   | Auto-Deploy | On commit |
+
+   Then add these **Environment Variables**:
+
+   | Key | Value |
+   |---|---|
+   | `GOOGLE_API_KEY` | your Gemini key |
+   | `GEMINI_MODEL` | `gemini-3.5-flash-lite` |
+   | `GEMINI_OCR_MODEL` | `gemini-3.1-flash-lite` |
+   | `MAX_FILE_MB` | `15` |
+   | `MAX_FILES_PER_JOB` | `20` |
+
+   Click **Deploy Web Service**. Don't set `PORT`: Render provides it, and the image listens on it.
+
+4. Wait for the deploy to show **Live**: 5–10 minutes the first time. Copy the service URL, for example `https://invoiceai-api-xxxx.onrender.com`.
+5. Check it:
+
+       curl https://<your-service>.onrender.com/health      # {"status":"ok"}
+
+   The interactive API docs are at `https://<your-service>.onrender.com/docs`.
+
+### Step 4: Deploy the frontend on Vercel
+
+The frontend forwards `/api/*` to your Render URL. That URL is read **at build time** from `BACKEND_URL`, so set it before or during the build. If you change it later, you must redeploy.
+
+**Option A: Vercel CLI (what the live demo uses)**
+
+    git clone -b frontend https://github.com/<your-user>/invoiceai.git invoiceai-frontend
+    cd invoiceai-frontend
+    npx vercel login
+    npx vercel link             # answer "N" to linking an existing project; it creates a new one
+    npx vercel deploy --prod --build-env BACKEND_URL=https://<your-service>.onrender.com
+
+The last command prints the site's URL, for example `https://invoiceai-frontend-xxxx.vercel.app`.
+
+This project isn't connected to Git, so pushing to `frontend` doesn't redeploy it. Run the `deploy` command again whenever you want an update.
+
+**Option B: Vercel dashboard (redeploys on every push to `frontend`)**
+
+1. Go to https://vercel.com/new and **Import** your `invoiceai` repo. Framework: **Next.js**. Root Directory: `./`.
+2. Under **Environment Variables**, add `BACKEND_URL` = `https://<your-service>.onrender.com`, then **Deploy**.
+   - This first build uses the repo's default branch. If that isn't `frontend`, it fails or builds the wrong code; that's expected.
+3. In **Project → Settings → Git → Production Branch**, set **`frontend`**.
+4. Under **Deployments**, find a deployment of `frontend`. If there isn't one yet, push any commit to `frontend`. Then choose **Redeploy**.
+
+Next.js is pinned to 15.5.29 on `frontend`. Vercel refuses to build the vulnerable 15.5.4, so don't downgrade it.
+
+### Step 5: Allow your site in the backend's CORS list (optional)
+
+The browser calls Vercel, and Vercel calls Render server-side, so CORS isn't needed for the normal setup.
+- **Blueprint users:** `render.yaml` sets `CORS_ORIGINS` to this project's own demo URL. Replace it with your Vercel URL in **Render → your service → Environment**.
+- **Only if** you build the frontend with `NEXT_PUBLIC_API_URL`, so the browser calls Render directly, CORS is required: set `CORS_ORIGINS` to your Vercel URL there.
+
+### Step 6: Keep the backend awake (recommended)
+
+Render's free services go to sleep after 15 minutes without requests, and the next request then waits 30–60 s while the service starts. To prevent this, use a free monitor:
+1. At https://uptimerobot.com, choose **Add New Monitor**: type **HTTP(s)**, URL `https://<your-service>.onrender.com/health`, interval **5 minutes**.
+2. A single always-on service fits inside Render's 750 free instance-hours a month.
+
+### Step 7: Test it end to end
+
+**In the browser:**
+1. Open your Vercel URL.
+2. Drop in the sample PDFs from `data/` on this branch, and click run. Optionally, first add columns such as `PO number`, `Quantity`, `Date ordered`.
+3. The Table, Visual and JSON views fill in as each file finishes. Every value links to the document line it was read from.
+
+**From a terminal** (this goes through Vercel, like the browser does):
+
+    SITE=https://<your-site>.vercel.app
+    curl $SITE/api/health                                                        # {"status":"ok"}
+    curl -F "files=@data/99907349 Roof 3-redacted.pdf" $SITE/api/jobs            # {"job_id":"…","status":"queued",…}
+    curl $SITE/api/jobs/<job_id>                                                 # repeat until "status":"done"
+
+For custom columns, add `-F 'columns=["PO number","Quantity","Date ordered"]'` to the `POST`.
+
+A document usually takes 10–40 s. The first request after the service has been asleep takes longer.
+
+### Updating your deployment
+
+| You changed | What to do |
+|---|---|
+| Backend code | Push to `lite`; Render redeploys by itself. Worker code is a copy: change it on `worker`, then run `scripts/sync_worker.sh` on `lite` and push |
+| Frontend code | **CLI setup:** run the `npx vercel deploy --prod --build-env BACKEND_URL=…` command again. **Dashboard setup:** push to `frontend` |
+| Render URL | Redeploy the frontend: `BACKEND_URL` is compiled into the build |
+| Gemini key | Render → your service → **Environment** → edit `GOOGLE_API_KEY` → Save (it redeploys) |
+
+### Troubleshooting
+
+| Symptom | Cause and fix |
+|---|---|
+| Render build: `open Dockerfile.lite: no such file or directory` | The service is building the wrong branch. Set the branch to **`lite`** in Render → Settings → Build & Deploy |
+| Render shows no **Blueprint** option, or doesn't list your repo | Use the **By hand** setup in Step 3, and give Render's GitHub app access to your repo (Account settings → Git providers) |
+| The first request hangs for about a minute, then works | The free service was asleep. Add the UptimeRobot monitor (Step 6) |
+| A file fails with a 404 `models/... is not found` | The model name is wrong or closed to your key. Use the two Flash-Lite models above |
+| Files fail with `429` / `RESOURCE_EXHAUSTED` | The free daily Gemini quota is used up. Wait for the daily reset, use a key in another project, or enable billing on the Google project |
+| An occasional `Validation Error` in one file's result | Flash-Lite sometimes returns malformed output. The service already retries once; re-run that file |
+| The site loads, but every upload says `Upload failed` | `BACKEND_URL` was missing or wrong at build time. Redeploy the frontend with the right Render URL |
+| Vercel build is blocked as vulnerable | Next.js was downgraded. Keep `next` at 15.5.29 or newer on `frontend` |
+
+Limits of the free setup:
+- One document is processed at a time.
+- Jobs and results are kept on the service's temporary disk, so they are lost when it restarts, sleeps or redeploys.
+- Throughput is capped by Gemini's free quota.
+
+For the scalable version, see Architecture below: RabbitMQ, separate PaddleOCR workers that autoscale, and monitoring. To run that on AWS, see the `infra` branch.
+
 ---
 
 ## 🚀 Getting Started
@@ -111,7 +287,7 @@ Worker Deployment and autoscaling manifests are on the `worker` branch (`k8s/`).
 
 `scripts/fake_worker.py` speaks the worker's queue protocol without OCR or an LLM, which is handy for testing the API against a real RabbitMQ: `RABBITMQ_URL=... python scripts/fake_worker.py`.
 
-GitHub Actions (`.github/workflows/ci.yml`) on `fastapi`: unit + RabbitMQ integration tests → image build → container smoke test through RabbitMQ (`scripts/smoke_test.sh`) → publish `ghcr.io/<owner>/<repo>-api` (pushes only).
+GitHub Actions (`.github/workflows/ci.yml`) on `fastapi`: unit + RabbitMQ integration tests → image build → container smoke test through RabbitMQ (`scripts/smoke_test.sh`) → publish `ghcr.io/<owner>/<repo>-api` (pushes only). Once the `infra` branch's Terraform is applied and the repository variable `AWS_DEPLOY_ROLE_ARN` is set (its `github_deploy_role_arn` output), pushes also build the image into ECR and roll it out to ECS (`deploy-aws` job; optional variables `AWS_REGION`, `ECS_CLUSTER`). Without that variable the job is skipped.
 
 ---
 

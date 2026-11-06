@@ -231,3 +231,62 @@ def test_queue_down_deletes_uploaded_objects(client, s3, monkeypatch):
 
     assert client.post("/jobs", files=[pdf("a.pdf")]).status_code == 503
     assert s3.deleted == list(s3.objects)
+
+
+KEY = "AIzaSyTestKey-0123456789_abcdefghijk"
+
+
+def test_keyless_job_returns_sample_data_without_queueing(client, monkeypatch):
+    monkeypatch.setattr(app_module, "DEMO_WITHOUT_KEY", True)
+    r = client.post("/jobs", files=[pdf("a.pdf"), pdf("b.pdf")])
+    assert r.status_code == 202
+    body = r.json()
+    assert body["demo"] is True and body["status"] == "done"
+    assert client.published == []  # no worker, no model call
+
+    status = client.get(f"/jobs/{body['job_id']}").json()
+    assert status["status"] == "done" and status["demo"] is True
+    first = status["results"][0]
+    assert first["demo"] is True
+    assert first["structured_data"]["extraction"][0]["header"]["purchase_order_number"] == "DEMO-1001"
+    po = first["fields"]["rows"][0]["PO number"]
+    assert po["value"] == "DEMO-1001" and po["source"]["line"] == 2
+
+
+def test_keyless_job_with_columns_returns_sample_rows(client, monkeypatch):
+    monkeypatch.setattr(app_module, "DEMO_WITHOUT_KEY", True)
+    r = client.post("/jobs", files=[pdf("a.pdf")], data={"columns": '["PO number", "Quantity", "Colour"]'})
+    result = client.get(f"/jobs/{r.json()['job_id']}").json()["results"][0]
+    assert "structured_data" not in result
+    assert result["fields"]["columns"] == ["PO number", "Quantity", "Colour"]
+    rows = result["fields"]["rows"]
+    assert len(rows) == 3  # one per sample line item
+    assert [row["Quantity"]["value"] for row in rows] == ["40", "6", "12"]
+    assert rows[0]["PO number"]["value"] == "DEMO-1001"
+    assert rows[0]["Colour"] == {"value": "Sample Colour", "source": None}
+
+
+def test_users_key_is_forwarded_to_the_workers_only(client, monkeypatch):
+    monkeypatch.setattr(app_module, "DEMO_WITHOUT_KEY", True)
+    r = client.post("/jobs", files=[pdf("a.pdf")], headers={"X-Gemini-Api-Key": f"  {KEY} "})
+    assert r.status_code == 202 and r.json()["demo"] is False
+    assert [m["api_key"] for m in client.published] == [KEY]
+    assert KEY not in r.text
+    assert KEY not in client.get(f"/jobs/{r.json()['job_id']}").text
+
+
+def test_keyless_job_uses_the_workers_key_when_demo_is_off(client):
+    r = client.post("/jobs", files=[pdf("a.pdf")])
+    assert r.json()["demo"] is False
+    assert "api_key" not in client.published[0]
+
+
+def test_malformed_key_is_rejected(client):
+    r = client.post("/jobs", files=[pdf("a.pdf")], headers={"X-Gemini-Api-Key": "not a key!"})
+    assert r.status_code == 400
+    assert client.published == []
+
+
+def test_config_reports_demo_mode(client, monkeypatch):
+    monkeypatch.setattr(app_module, "DEMO_WITHOUT_KEY", True)
+    assert client.get("/config").json() == {"demo_without_key": True}

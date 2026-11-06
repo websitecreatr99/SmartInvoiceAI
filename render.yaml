@@ -11,6 +11,10 @@ services:
     healthCheckPath: /health
     autoDeploy: true
     envVars:
+      # Visitors who paste no Gemini key in the UI get sample data (demo.py), so this key is only a
+      # fallback when DEMO_WITHOUT_KEY is 0. Set it to 0 to let keyless visitors use this key and quota.
+      - key: DEMO_WITHOUT_KEY
+        value: "1"
       - key: GOOGLE_API_KEY
         sync: false
       # Two Flash-Lite models: each has its own free-tier daily quota, so splitting the two calls per
