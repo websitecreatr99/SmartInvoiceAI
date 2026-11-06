@@ -4,21 +4,36 @@ aws_region  = "ap-south-1"
 environment = "prod"
 
 # Commit SHAs already pushed to ECR (see README: bootstrap order).
-api_image_tag    = "0000000000000000000000000000000000000000"
-worker_image_tag = "0000000000000000000000000000000000000000"
+api_image_tag      = "0000000000000000000000000000000000000000"
+worker_image_tag   = "0000000000000000000000000000000000000000"
+frontend_image_tag = "0000000000000000000000000000000000000000"
+
+# Optional: lets Terraform fill the Gemini secret (the key then lives in state). Prefer
+# TF_VAR_gemini_api_key in the environment over writing it here, or set it out of band (README).
+# gemini_api_key = ""
 
 cors_origins    = "https://app.example.com"
 certificate_arn = "" # arn:aws:acm:ap-south-1:123456789012:certificate/...
 
-api_desired_count = 1
-worker_min_count  = 1
-worker_max_count  = 20
-worker_use_spot   = false
+api_desired_count      = 1
+frontend_desired_count = 1
+worker_min_count       = 1
+worker_max_count       = 20
+worker_use_spot        = false
+worker_cpu             = 2048
+worker_memory          = 8192
+gemini_model           = "gemini-3.5-flash-lite"
+ocr_dpi                = 200
 
 mq_instance_type   = "mq.m5.large"
 mq_deployment_mode = "SINGLE_INSTANCE" # CLUSTER_MULTI_AZ for HA
 
-enable_langfuse           = false
+# Monitoring host: Grafana/Prometheus/Loki/Langfuse from a checkout of the tracking branch.
+enable_monitoring_host   = true
+monitoring_instance_type = "t3.large"
+tracking_source_dir      = "../tracking" # e.g. git worktree add ../tracking origin/tracking
+
+enable_langfuse           = false # implied by enable_monitoring_host
 enable_managed_prometheus = false
 
 github_repo                 = "kishannextq/hackathon"

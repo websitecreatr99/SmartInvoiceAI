@@ -79,8 +79,15 @@ resource "aws_iam_role" "worker_task" {
   assume_role_policy = data.aws_iam_policy_document.ecs_tasks_assume.json
 }
 
+# The frontend calls no AWS APIs; the role exists for ECS Exec.
+resource "aws_iam_role" "frontend_task" {
+  name               = "${local.name}-frontend-task"
+  assume_role_policy = data.aws_iam_policy_document.ecs_tasks_assume.json
+}
+
 data "aws_iam_policy_document" "api_task" {
   statement {
+    sid       = "EfsStorage"
     actions   = ["elasticfilesystem:ClientMount", "elasticfilesystem:ClientWrite"]
     resources = [aws_efs_file_system.storage.arn]
     condition {
@@ -89,12 +96,40 @@ data "aws_iam_policy_document" "api_task" {
       values   = [aws_efs_access_point.storage.arn]
     }
   }
+
+  # Upload files for the worker and clean them up when a job is deleted.
+  statement {
+    sid       = "UploadsWrite"
+    actions   = ["s3:PutObject", "s3:DeleteObject"]
+    resources = ["${aws_s3_bucket.uploads.arn}/*"]
+  }
 }
 
 resource "aws_iam_role_policy" "api_task" {
-  name   = "efs-storage"
+  name   = "api-storage"
   role   = aws_iam_role.api_task.id
   policy = data.aws_iam_policy_document.api_task.json
+}
+
+data "aws_iam_policy_document" "worker_task" {
+  statement {
+    sid       = "UploadsRead"
+    actions   = ["s3:GetObject"]
+    resources = ["${aws_s3_bucket.uploads.arn}/*"]
+  }
+
+  # The worker protects its own task from scale-in while it processes a job.
+  statement {
+    sid       = "TaskScaleInProtection"
+    actions   = ["ecs:UpdateTaskProtection", "ecs:GetTaskProtection"]
+    resources = ["arn:aws:ecs:${var.aws_region}:${local.account_id}:task/${aws_ecs_cluster.main.name}/*"]
+  }
+}
+
+resource "aws_iam_role_policy" "worker_task" {
+  name   = "worker-app"
+  role   = aws_iam_role.worker_task.id
+  policy = data.aws_iam_policy_document.worker_task.json
 }
 
 # Lets `aws ecs execute-command` open a shell in running tasks for debugging.
@@ -112,8 +147,9 @@ data "aws_iam_policy_document" "ecs_exec" {
 
 resource "aws_iam_role_policy" "ecs_exec" {
   for_each = {
-    api    = aws_iam_role.api_task.id
-    worker = aws_iam_role.worker_task.id
+    api      = aws_iam_role.api_task.id
+    worker   = aws_iam_role.worker_task.id
+    frontend = aws_iam_role.frontend_task.id
   }
 
   name   = "ecs-exec"

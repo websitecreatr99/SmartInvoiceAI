@@ -1,6 +1,7 @@
 # GitHub Actions authenticates with OIDC instead of long-lived access keys.
 # Workflows need `permissions: id-token: write` and aws-actions/configure-aws-credentials
-# with role-to-assume = the github_deploy_role_arn output.
+# with role-to-assume = the github_deploy_role_arn output (stored as the AWS_DEPLOY_ROLE_ARN
+# repository variable). One role serves the fastapi, worker and frontend branches.
 
 resource "aws_iam_openid_connect_provider" "github" {
   count = var.create_github_oidc_provider ? 1 : 0
@@ -70,6 +71,7 @@ data "aws_iam_policy_document" "github_deploy" {
       "ecr:PutImage",
       "ecr:UploadLayerPart",
     ]
+    # api, worker and frontend (local.images).
     resources = [for r in aws_ecr_repository.app : r.arn]
   }
 
@@ -80,16 +82,22 @@ data "aws_iam_policy_document" "github_deploy" {
     resources = ["*"]
   }
 
+  # aws_ecs_service.id is the service ARN.
   statement {
     sid       = "UpdateServices"
     actions   = ["ecs:UpdateService", "ecs:DescribeServices"]
-    resources = [aws_ecs_service.api.id, aws_ecs_service.worker.id]
+    resources = [aws_ecs_service.api.id, aws_ecs_service.worker.id, aws_ecs_service.frontend.id]
   }
 
   statement {
-    sid       = "PassTaskRoles"
-    actions   = ["iam:PassRole"]
-    resources = [aws_iam_role.execution.arn, aws_iam_role.api_task.arn, aws_iam_role.worker_task.arn]
+    sid     = "PassTaskRoles"
+    actions = ["iam:PassRole"]
+    resources = [
+      aws_iam_role.execution.arn,
+      aws_iam_role.api_task.arn,
+      aws_iam_role.worker_task.arn,
+      aws_iam_role.frontend_task.arn,
+    ]
     condition {
       test     = "StringEquals"
       variable = "iam:PassedToService"

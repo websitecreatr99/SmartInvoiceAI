@@ -90,11 +90,27 @@ resource "aws_route_table_association" "private" {
   route_table_id = aws_route_table.private[count.index].id
 }
 
+# Upload traffic (API -> S3 -> worker) and the tracking bundle stay off the NAT gateway.
+resource "aws_vpc_endpoint" "s3" {
+  vpc_id            = aws_vpc.main.id
+  service_name      = "com.amazonaws.${var.aws_region}.s3"
+  vpc_endpoint_type = "Gateway"
+  route_table_ids   = aws_route_table.private[*].id
+
+  tags = { Name = "${local.name}-s3" }
+}
+
 # --- Security groups -------------------------------------------------------
 
 resource "aws_security_group" "alb" {
   name        = "${local.name}-alb"
-  description = "Public HTTP/HTTPS into the API load balancer"
+  description = "Public HTTP/HTTPS into the load balancer"
+  vpc_id      = aws_vpc.main.id
+}
+
+resource "aws_security_group" "frontend" {
+  name        = "${local.name}-frontend"
+  description = "Next.js frontend tasks"
   vpc_id      = aws_vpc.main.id
 }
 
@@ -110,7 +126,7 @@ resource "aws_security_group" "worker" {
   vpc_id      = aws_vpc.main.id
 }
 
-# Attach this group to Prometheus/Grafana/Langfuse tasks from the monitoring repo.
+# Monitoring host (monitoring_host.tf): Prometheus, Grafana, Loki/Alloy, Langfuse.
 resource "aws_security_group" "monitoring" {
   name        = "${local.name}-monitoring"
   description = "Monitoring stack (Prometheus, Grafana, Langfuse)"
@@ -145,9 +161,18 @@ resource "aws_vpc_security_group_ingress_rule" "alb_https" {
   to_port           = 443
 }
 
-resource "aws_vpc_security_group_ingress_rule" "api_from_alb" {
-  security_group_id            = aws_security_group.api.id
+resource "aws_vpc_security_group_ingress_rule" "frontend_from_alb" {
+  security_group_id            = aws_security_group.frontend.id
   referenced_security_group_id = aws_security_group.alb.id
+  ip_protocol                  = "tcp"
+  from_port                    = 3000
+  to_port                      = 3000
+}
+
+# The frontend's Next.js server proxies /api/* to api.invoiceai.local:5000.
+resource "aws_vpc_security_group_ingress_rule" "api_from_frontend" {
+  security_group_id            = aws_security_group.api.id
+  referenced_security_group_id = aws_security_group.frontend.id
   ip_protocol                  = "tcp"
   from_port                    = 5000
   to_port                      = 5000
@@ -194,10 +219,35 @@ resource "aws_vpc_security_group_ingress_rule" "efs_from_api" {
   to_port                      = 2049
 }
 
-# Outbound: tasks need ECR, Secrets Manager, CloudWatch, Gemini and Langfuse.
+# Worker -> self-hosted Langfuse on the monitoring host.
+resource "aws_vpc_security_group_ingress_rule" "monitoring_langfuse_from_worker" {
+  security_group_id            = aws_security_group.monitoring.id
+  referenced_security_group_id = aws_security_group.worker.id
+  ip_protocol                  = "tcp"
+  from_port                    = 3002
+  to_port                      = 3002
+}
+
+# FireLens (Fluent Bit) in every task -> Alloy's Loki push endpoint on the monitoring host.
+resource "aws_vpc_security_group_ingress_rule" "monitoring_loki_push" {
+  for_each = {
+    api      = aws_security_group.api.id
+    worker   = aws_security_group.worker.id
+    frontend = aws_security_group.frontend.id
+  }
+
+  security_group_id            = aws_security_group.monitoring.id
+  referenced_security_group_id = each.value
+  ip_protocol                  = "tcp"
+  from_port                    = 3500
+  to_port                      = 3500
+}
+
+# Outbound: tasks need ECR, Secrets Manager, CloudWatch, S3, Gemini and the monitoring host.
 resource "aws_vpc_security_group_egress_rule" "all" {
   for_each = {
     alb        = aws_security_group.alb.id
+    frontend   = aws_security_group.frontend.id
     api        = aws_security_group.api.id
     worker     = aws_security_group.worker.id
     monitoring = aws_security_group.monitoring.id

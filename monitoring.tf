@@ -1,9 +1,8 @@
-# Hooks for the monitoring repository. Prometheus, Grafana and Langfuse are deployed from there
-# as their own ECS services in this cluster/VPC, using the outputs of this stack.
-#
-# Prometheus scrape targets (dns_sd_configs, type A):
-#   api.<namespace>:5000      /metrics
-#   worker.<namespace>:9100   /metrics
+# Private DNS (Cloud Map) for the ECS services. Each service registers one A record per task:
+#   api.<namespace>:5000       the frontend's /api proxy target, and Prometheus /metrics
+#   worker.<namespace>:9100    Prometheus /metrics (dns_sd_configs, type A)
+#   frontend.<namespace>:3000
+# monitoring.<namespace> (the monitoring host) is registered in monitoring_host.tf.
 
 resource "aws_service_discovery_private_dns_namespace" "main" {
   name        = "${var.project}.local"
