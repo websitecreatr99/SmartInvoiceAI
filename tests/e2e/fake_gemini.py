@@ -39,13 +39,32 @@ class FakeGemini(BaseChatModel):
     def _generate(self, messages: List[BaseMessage], stop=None, run_manager=None, **kwargs: Any) -> ChatResult:
         if (self.google_api_key or "").startswith("bad"):
             raise ValueError("400 API key not valid. Please pass a valid API key. [reason: API_KEY_INVALID]")
+        if any(isinstance(m.content, list) and any(isinstance(p, dict) and p.get("type") == "media" for p in m.content)
+               for m in messages):
+            # OCR_ENGINE=gemini: a transcription request carrying the file itself.
+            return self._reply(OCR_TRANSCRIPT, prompt_chars=len(OCR_TRANSCRIPT) * 20)
         prompt = "\n".join(str(m.content) for m in messages)
-        time.sleep(random.uniform(*map(float, os.getenv("FAKE_LLM_LATENCY", "0.3,1.2").split(","))))
         text = answer_columns(prompt) if "Columns to extract:" in prompt else answer_invoice(prompt)
-        usage = {"input_tokens": len(prompt) // 4, "output_tokens": len(text) // 4,
-                 "total_tokens": len(prompt) // 4 + len(text) // 4}
+        return self._reply(text, prompt_chars=len(prompt))
+
+    def _reply(self, text: str, prompt_chars: int) -> ChatResult:
+        time.sleep(random.uniform(*map(float, os.getenv("FAKE_LLM_LATENCY", "0.3,1.2").split(","))))
+        usage = {"input_tokens": prompt_chars // 4, "output_tokens": len(text) // 4,
+                 "total_tokens": prompt_chars // 4 + len(text) // 4}
         message = AIMessage(content=text, usage_metadata=usage)
         return ChatResult(generations=[ChatGeneration(message=message)], llm_output={"usage_metadata": usage})
+
+
+# What the fake "reads" from any file when Gemini does the OCR (OCR_ENGINE=gemini).
+OCR_TRANSCRIPT = """=== PAGE 1 ===
+WORK ORDER
+PO Number: 4521
+Job #: 46500
+Email Date: 10/25/24
+Shingles (sq) 41.66
+Ridge cap (bundles) 6
+Drip edge (pcs) 12
+"""
 
 
 def document_lines(prompt: str) -> List[tuple]:
