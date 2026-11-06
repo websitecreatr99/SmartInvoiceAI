@@ -48,7 +48,7 @@ echo "ok   POST /upload, /delete"
 curl -fsS -F "pdfs=@${pdf};filename=ui.pdf" "$BASE/upload" > /dev/null
 body=$(curl -fsS -X POST --max-time 120 "$BASE/process") || fail "/process failed"
 echo "$body" | grep -q '"success":true' || fail "/process returned $body"
-echo "$body" | grep -q '"filename":"ui.json"' || fail "/process missing result: $body"
+echo "$body" | grep -q '"filename":"ui.pdf"' || fail "/process missing result: $body"
 echo "ok   POST /process (API -> RabbitMQ -> worker -> RabbitMQ -> API)"
 
 body=$(curl -fsS -F "pdfs=@${pdf};filename=b1.pdf" -F "pdfs=@${pdf};filename=b2.pdf" -F "pdfs=@${pdf};filename=b3.pdf" "$BASE/jobs") \
