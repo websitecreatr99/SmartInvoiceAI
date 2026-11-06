@@ -98,7 +98,7 @@ Worker Deployment and autoscaling manifests are on the `worker` branch (`k8s/`).
 
 `scripts/fake_worker.py` speaks the worker's queue protocol without OCR or an LLM, which is handy for testing the API against a real RabbitMQ: `RABBITMQ_URL=... python scripts/fake_worker.py`.
 
-GitHub Actions (`.github/workflows/ci.yml`) on `fastapi`: unit + RabbitMQ integration tests → image build → container smoke test through RabbitMQ (`scripts/smoke_test.sh`) → publish `ghcr.io/<owner>/<repo>-api` (pushes only).
+GitHub Actions (`.github/workflows/ci.yml`) on `fastapi`: unit + RabbitMQ integration tests → image build → container smoke test through RabbitMQ (`scripts/smoke_test.sh`) → publish `ghcr.io/<owner>/<repo>-api` (pushes only). Once the `infra` branch's Terraform is applied and the repository variable `AWS_DEPLOY_ROLE_ARN` is set (its `github_deploy_role_arn` output), pushes also build the image into ECR and roll it out to ECS (`deploy-aws` job; optional variables `AWS_REGION`, `ECS_CLUSTER`). Without that variable the job is skipped.
 
 ---
 
