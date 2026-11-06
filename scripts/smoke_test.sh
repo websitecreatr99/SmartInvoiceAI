@@ -23,7 +23,7 @@ fail() {
   exit 1
 }
 
-docker run -d --name "$NAME" --network host -e RABBITMQ_URL="$RABBITMQ_URL" "$IMAGE" \
+docker run -d --name "$NAME" --network host -e RABBITMQ_URL="$RABBITMQ_URL" -e DEMO_WITHOUT_KEY=0 "$IMAGE" \
   uvicorn app:app --host 127.0.0.1 --port "$PORT" > /dev/null
 
 for _ in $(seq 1 30); do
