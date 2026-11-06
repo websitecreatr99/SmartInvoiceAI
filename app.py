@@ -5,7 +5,7 @@ import time
 from contextlib import asynccontextmanager
 from typing import List, Optional, Tuple
 
-from fastapi import FastAPI, File, Form, HTTPException, Request, Response, UploadFile
+from fastapi import FastAPI, File, Form, Header, HTTPException, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pika.exceptions import AMQPError
@@ -13,6 +13,7 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from pydantic import BaseModel
 
 import broker
+import demo
 import metrics
 import object_store
 from job_store import JobStore
@@ -23,6 +24,11 @@ MAX_FILES_PER_JOB = int(os.getenv("MAX_FILES_PER_JOB", "100"))
 PROCESS_TIMEOUT = int(os.getenv("PROCESS_TIMEOUT", "600"))
 MAX_COLUMNS = 50
 MAX_COLUMN_CHARS = 100
+# Without a Gemini key in the request (X-Gemini-Api-Key header), return sample data (demo.py) instead
+# of spending the server's own key. Set to 0 to process keyless requests with the workers' GOOGLE_API_KEY.
+DEMO_WITHOUT_KEY = os.getenv("DEMO_WITHOUT_KEY", "1") == "1"
+# Google API keys are letters, digits, "-", "_" and "." (e.g. "AIza..." or "AQ.Ab8R...").
+API_KEY_PATTERN = re.compile(r"[A-Za-z0-9._-]{20,200}")
 
 # Must match src/document_reader.py on the worker branch: PDFs and images are OCR'd, the rest read as text.
 SUPPORTED_EXTENSIONS = {
@@ -98,8 +104,13 @@ def safe_path(filename: str) -> str:
     return os.path.join(UPLOAD_FOLDER, name)
 
 
-def submit_job(files: List[Tuple[str, bytes]], endpoint: str, columns: Optional[List[str]] = None) -> str:
-    """Create a job and send one message per file to the workers, which process them in parallel."""
+def submit_job(files: List[Tuple[str, bytes]], endpoint: str, columns: Optional[List[str]] = None,
+               api_key: Optional[str] = None) -> str:
+    """Create a job and send one message per file to the workers, which process them in parallel.
+
+    `api_key` is the caller's own Gemini key. It travels only inside the job messages (the workers use
+    it instead of their GOOGLE_API_KEY) and is never logged or stored with the job or its results.
+    """
     columns = columns or []
     job_id = store.create([name for name, _ in files], columns)
     try:
@@ -107,8 +118,9 @@ def submit_job(files: List[Tuple[str, bytes]], endpoint: str, columns: Optional[
     except object_store.StorageUnavailable as e:
         store.delete(job_id)
         raise HTTPException(status_code=503, detail=f"File storage unavailable: {e}")
+    key = {"api_key": api_key} if api_key else {}
     messages = [
-        {"job_id": job_id, "filename": name, **ref, "columns": columns} for (name, _), ref in zip(files, refs)
+        {"job_id": job_id, "filename": name, **ref, "columns": columns, **key} for (name, _), ref in zip(files, refs)
     ]
     try:
         broker.publish_jobs(messages)
@@ -166,9 +178,33 @@ def parse_columns(raw: Optional[str]) -> List[str]:
     return columns
 
 
+def submit_demo_job(files: List[Tuple[str, bytes]], columns: List[str]) -> str:
+    """A job answered at once with sample data: nothing is read from the files and no model is called."""
+    job_id = store.create([name for name, _ in files], columns)
+    for name, _ in files:
+        on_result(demo.result(job_id, name, columns))
+    metrics.JOBS_SUBMITTED.labels("demo").inc()
+    return job_id
+
+
+def parse_api_key(value: Optional[str]) -> Optional[str]:
+    key = (value or "").strip()
+    if not key:
+        return None
+    if not API_KEY_PATTERN.fullmatch(key):
+        raise HTTPException(status_code=400, detail="That doesn't look like a Gemini API key")
+    return key
+
+
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+@app.get("/config")
+def config():
+    """What the UI needs to know: whether requests without a Gemini key get sample data."""
+    return {"demo_without_key": DEMO_WITHOUT_KEY}
 
 
 @app.get("/metrics", include_in_schema=False)
@@ -243,13 +279,18 @@ def create_job(
     files: List[UploadFile] = File(default=[]),
     pdfs: List[UploadFile] = File(default=[]),
     columns: Optional[str] = Form(default=None),
+    x_gemini_api_key: Optional[str] = Header(default=None),
 ):
     """Queue documents for the workers and return immediately; poll GET /jobs/{job_id} for results.
 
     Every call gets its own job, so concurrent users never see each other's files. `columns`
     optionally names the fields to extract; without it the invoice schema is used. `pdfs` is
     the field name used before other file types were accepted.
+
+    The `X-Gemini-Api-Key` header carries the caller's own Gemini key. Without it, and with
+    DEMO_WITHOUT_KEY on (the default), the job is answered at once with sample data marked `"demo": true`.
     """
+    api_key = parse_api_key(x_gemini_api_key)
     uploads = files + pdfs
     if len(uploads) > MAX_FILES_PER_JOB:
         raise HTTPException(status_code=413, detail=f"At most {MAX_FILES_PER_JOB} files per job")
@@ -260,13 +301,15 @@ def create_job(
             status_code=400, detail=f"No supported files in upload. Accepted: {', '.join(sorted(SUPPORTED_EXTENSIONS))}"
         )
 
-    job_id = submit_job(accepted, "jobs", wanted)
+    sample = api_key is None and DEMO_WITHOUT_KEY
+    job_id = submit_demo_job(accepted, wanted) if sample else submit_job(accepted, "jobs", wanted, api_key)
     return {
         "job_id": job_id,
-        "status": "queued",
+        "status": "done" if sample else "queued",
         "files": [name for name, _ in accepted],
         "skipped": skipped,
         "columns": wanted,
+        "demo": sample,
     }
 
 

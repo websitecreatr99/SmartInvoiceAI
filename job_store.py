@@ -55,7 +55,7 @@ class JobStore:
             return False
 
         if result.get("ok"):
-            data = {key: result[key] for key in ("structured_data", "fields") if key in result}
+            data = {key: result[key] for key in ("structured_data", "fields", "demo") if key in result}
             name, content = f"{filename}.json", json.dumps(data, ensure_ascii=False, indent=4)
         else:
             name, content = f"{filename}.error", str(result.get("error") or "Unknown error")
@@ -97,4 +97,6 @@ class JobStore:
             "files": files,
             "columns": meta.get("columns", []),
             "results": results,
+            # Sample data: the job was submitted without a Gemini API key (demo.py).
+            "demo": any(r.get("demo") for r in results),
         }
