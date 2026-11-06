@@ -1,0 +1,11 @@
+# Worker without PaddleOCR/OpenCV, for OCR_ENGINE=gemini (gemini_ocr.py): fits in ~512 MB of RAM.
+pika==1.3.2
+boto3==1.43.53
+prometheus-client==0.21.1
+langfuse==3.3.4
+langchain==0.3.27
+langchain_google_genai==2.1.10
+pydantic==2.11.7
+python-dotenv==1.1.1
+pypdf==5.4.0
+pillow==11.3.0

@@ -1,0 +1,29 @@
+# Render Blueprint: InvoiceAI as one free web service (Dockerfile.lite: API + in-process Gemini worker).
+# Render dashboard -> New -> Blueprint -> this repo, branch "lite". You'll be asked for GOOGLE_API_KEY.
+# Free services sleep after 15 min without requests; ping /health every 5 min (e.g. UptimeRobot) to keep it up.
+services:
+  - type: web
+    name: invoiceai-api
+    runtime: docker
+    plan: free
+    branch: lite
+    dockerfilePath: ./Dockerfile.lite
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: GOOGLE_API_KEY
+        sync: false
+      # Two Flash-Lite models: each has its own free-tier daily quota, so splitting the two calls per
+      # document (transcribe, then extract) doubles capacity. gemini-3.5-flash extracts a little better
+      # but its free tier allowed only 20 requests a day when this was set up.
+      - key: GEMINI_MODEL
+        value: gemini-3.5-flash-lite
+      - key: GEMINI_OCR_MODEL
+        value: gemini-3.1-flash-lite
+      - key: CORS_ORIGINS
+        value: https://hackathon-frontend-gamma-seven.vercel.app
+      # Gemini takes documents up to ~20 MB per request; the whole job is held in memory until processed.
+      - key: MAX_FILE_MB
+        value: "15"
+      - key: MAX_FILES_PER_JOB
+        value: "20"

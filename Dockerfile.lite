@@ -1,0 +1,28 @@
+# InvoiceAI as one small service: API + in-process worker, Gemini for OCR, no RabbitMQ.
+# Fits a 512 MB host (e.g. Render's free web service). See render.yaml.
+FROM python:3.11-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    INLINE_WORKER=1 \
+    OCR_ENGINE=gemini
+
+WORKDIR /app
+
+COPY requirements.txt worker/requirements-gemini.txt ./
+RUN pip install -r requirements.txt -r requirements-gemini.txt
+
+COPY app.py broker.py inline_worker.py job_store.py metrics.py object_store.py queues.py ./
+COPY worker ./worker
+
+RUN useradd --create-home --uid 1000 appuser \
+    && mkdir -p data storage \
+    && chown -R appuser:appuser /app
+USER appuser
+
+# Render (and most PaaS hosts) set PORT.
+ENV PORT=5000
+EXPOSE 5000
+CMD ["sh", "-c", "exec uvicorn app:app --host 0.0.0.0 --port ${PORT}"]
