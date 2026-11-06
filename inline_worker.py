@@ -23,6 +23,13 @@ WORKER_DIR = os.getenv("WORKER_DIR", os.path.join(os.path.dirname(os.path.abspat
 CONCURRENCY = int(os.getenv("INLINE_CONCURRENCY", "1"))
 MAX_ATTEMPTS = int(os.getenv("MAX_ATTEMPTS", "3"))
 RETRY_DELAY_SECONDS = float(os.getenv("INLINE_RETRY_DELAY_SECONDS", "10"))
+# Small models (Flash-Lite) now and then return JSON that fails the schema even after the fixing
+# parser; a fresh attempt usually works. Only these errors are retried, so a bad file isn't re-run.
+MODEL_OUTPUT_ERRORS = ("LLM extraction returned no data", "Validation Error")
+
+
+def _retry_model_output(result: dict) -> bool:
+    return not result.get("ok") and str(result.get("error", "")).startswith(MODEL_OUTPUT_ERRORS)
 
 
 class InlineWorker:
@@ -56,10 +63,13 @@ class InlineWorker:
             module, w = self._load()
             for attempt in range(1, MAX_ATTEMPTS + 1):
                 result = module.process_message(message, w.model_handler, w.read_document, w.handler)
-                if not result.pop("retryable", False) or attempt == MAX_ATTEMPTS:
+                transient = result.pop("retryable", False)
+                bad_output = attempt == 1 and _retry_model_output(result)
+                if not (transient or bad_output) or attempt == MAX_ATTEMPTS:
                     break
-                logger.warning(f"Job {message.get('job_id')}: temporary failure, retry {attempt}/{MAX_ATTEMPTS - 1}")
-                time.sleep(RETRY_DELAY_SECONDS * attempt)
+                reason = "temporary failure" if transient else "unusable model output"
+                logger.warning(f"Job {message.get('job_id')}: {reason}, retry {attempt}/{MAX_ATTEMPTS - 1}")
+                time.sleep(RETRY_DELAY_SECONDS * attempt if transient else 1)
         except Exception as e:  # process_message never raises; this guards the loading step
             logger.exception("Inline worker failed")
             result = {"job_id": message.get("job_id"), "filename": message.get("filename"), "ok": False, "error": str(e)}
