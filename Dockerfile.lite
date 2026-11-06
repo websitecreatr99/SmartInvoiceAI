@@ -14,7 +14,7 @@ WORKDIR /app
 COPY requirements.txt worker/requirements-gemini.txt ./
 RUN pip install -r requirements.txt -r requirements-gemini.txt
 
-COPY app.py broker.py inline_worker.py job_store.py metrics.py object_store.py queues.py ./
+COPY app.py broker.py demo.py inline_worker.py job_store.py metrics.py object_store.py queues.py ./
 COPY worker ./worker
 
 RUN useradd --create-home --uid 1000 appuser \
