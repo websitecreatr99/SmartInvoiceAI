@@ -33,7 +33,7 @@ docker build --build-arg BACKEND_URL=http://api:5000 -t invoiceai-frontend .
 docker run -p 3000:3000 invoiceai-frontend
 ```
 
-Only `/api/jobs`, `/api/jobs/{id}` and `/api/health` are proxied, so the API's `/metrics` and `/docs` aren't reachable through the site.
+Only `/api/jobs`, `/api/jobs/{id}`, `/api/health` and `/api/config` are proxied, so the API's `/metrics` and `/docs` aren't reachable through the site.
 
 On AWS (the `infra` branch) the frontend runs on ECS behind the load balancer and proxies to the API at `http://api.invoiceai.local:5000` (private DNS). CI (`.github/workflows/ci.yml`) typechecks, lints, builds and smoke-tests the image; once `AWS_DEPLOY_ROLE_ARN` is set as a repository variable, pushes also deploy to ECS (override the backend with the `FRONTEND_BACKEND_URL` variable).
 
@@ -52,6 +52,8 @@ The backend is the `lite` branch on Render's free tier, which sleeps after 15 mi
 
 1. **Upload.** Pick or drop files. Accepted types mirror the API's `SUPPORTED_EXTENSIONS`: PDFs and images (`.png .jpg .jpeg .tif .tiff .bmp .webp`) are OCR'd; `.txt .csv .tsv .md .json .xml .html .htm .docx` are read as text. Duplicates (same name and size) are ignored.
 2. **Columns (optional).** Add the fields you want as chips (Enter or comma adds one; pasting a list adds them all). Leave it empty to use the invoice schema (header + line items).
+   **Gemini API key (optional).** The user's own key is sent in the `X-Gemini-Api-Key` header with that upload only. "Remember on this device" keeps it in `localStorage`. Without a key, when the API's `GET /config` reports `demo_without_key`, the button reads **Try with sample data** and the results show a notice that they are sample (dummy) data.
+   **View code on GitHub** in the header links to the repository (`NEXT_PUBLIC_GITHUB_URL` at build time overrides it).
 3. **Run.** The UI sends one `POST /jobs` (multipart `files`, plus `columns` as a JSON list), so every run is its own job and concurrent users never share uploads. It then polls `GET /jobs/{job_id}` every 1.5 s (for up to 15 minutes) and shows each file's result as soon as its worker finishes.
 4. **Pipeline stepper.** Upload → OCR → AI → Done. The workers don't report the OCR → AI hand-off, so that step is estimated. Failed and partly failed runs show which step went wrong and how many documents were affected.
 5. **Results.** Three views:
