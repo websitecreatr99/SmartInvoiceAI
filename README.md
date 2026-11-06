@@ -9,7 +9,7 @@ that runs the tracking branch's docker compose stack (Prometheus, Grafana, Loki,
 | Target | Where | Status |
 |--------|-------|--------|
 | AWS ECS Fargate | this README (`*.tf` at the top level) | Paid; not deployed |
-| Render (free) + Vercel (free) | `lite` and `frontend` branches | **Live.** API with the worker running in-process and Gemini doing the OCR, so no RabbitMQ and about 110 MB of RAM. Backend https://hackathon-elnx.onrender.com, frontend https://hackathon-frontend-gamma-seven.vercel.app. Deployment steps are in those branches' READMEs |
+| Render (free) + Vercel (free) | `backend_lite` and `frontend` branches | **Live.** API with the worker running in-process and Gemini doing the OCR, so no RabbitMQ and about 110 MB of RAM. Backend https://hackathon-elnx.onrender.com, frontend https://hackathon-frontend-gamma-seven.vercel.app. Deployment steps are in those branches' READMEs |
 | Hugging Face Space + Vercel | [`huggingface/`](huggingface/README.md) | Not usable for free any more: Docker Spaces now need a paid plan |
 | Oracle Cloud Always Free VM | [`oracle/`](oracle/README.md) | Works, but Oracle needs a credit card to sign up |
 
