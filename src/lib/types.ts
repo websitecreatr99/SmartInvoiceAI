@@ -83,6 +83,8 @@ export interface ResultItem {
   structured_data?: Extraction | string;
   fields?: Fields;
   error?: string;
+  /** Sample data: the job ran without a Gemini API key, so nothing was read from the file. */
+  demo?: boolean;
 }
 
 export interface Progress {
@@ -98,6 +100,7 @@ export interface JobStatus {
   files: string[];
   columns: string[];
   results: ResultItem[];
+  demo?: boolean;
 }
 
 export type Stage = "idle" | "upload" | "ocr" | "ai" | "done" | "error";

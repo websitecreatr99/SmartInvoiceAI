@@ -21,13 +21,30 @@ async function errorMessage(res: Response, fallback: string) {
 }
 
 /** Queue a job of its own for these files, so concurrent users never share uploads. */
-export async function createJob(files: File[], columns: string[]): Promise<{ job_id: string; files: string[] }> {
+// The user's own Gemini key goes in a header, only with the upload. Without one the API answers with sample data.
+export async function createJob(
+  files: File[],
+  columns: string[],
+  apiKey?: string,
+): Promise<{ job_id: string; files: string[]; demo?: boolean }> {
   const form = new FormData();
   files.forEach((f) => form.append("files", f));
   if (columns.length) form.append("columns", JSON.stringify(columns));
-  const res = await fetch(`${API_URL}/jobs`, { method: "POST", body: form });
+  const headers: Record<string, string> = apiKey?.trim() ? { "X-Gemini-Api-Key": apiKey.trim() } : {};
+  const res = await fetch(`${API_URL}/jobs`, { method: "POST", body: form, headers });
   if (!res.ok) throw new Error(await errorMessage(res, "Upload failed"));
   return res.json();
+}
+
+/** Whether jobs without a key get sample data (the default) or use the server's own key. */
+export async function getConfig(): Promise<{ demo_without_key: boolean }> {
+  try {
+    const res = await fetch(`${API_URL}/config`, { cache: "no-store" });
+    if (res.ok) return await res.json();
+  } catch {
+    // Older API without /config, or asleep: assume sample data, the safe thing to promise.
+  }
+  return { demo_without_key: true };
 }
 
 export async function getJob(jobId: string): Promise<JobStatus> {

@@ -3,6 +3,7 @@
 import { useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { Columns3, File as FileIcon, FileCode, FileImage, FileSpreadsheet, FileText, Loader2, UploadCloud, X, Zap } from "lucide-react";
+import ApiKeyInput from "./ApiKeyInput";
 import Pipeline from "./Pipeline";
 import { ACCEPTED_EXTENSIONS, isSupported } from "@/lib/api";
 import type { Failure, Progress, Stage } from "@/lib/types";
@@ -17,6 +18,11 @@ interface Props {
   onColumnsChange: (columns: string[]) => void;
   onRemove: (index: number) => void;
   onProcess: () => void;
+  apiKey: string;
+  rememberKey: boolean;
+  demoWithoutKey: boolean;
+  onApiKeyChange: (key: string) => void;
+  onRememberKeyChange: (remember: boolean) => void;
 }
 
 const FILE_KINDS = [
@@ -103,7 +109,22 @@ function formatSize(bytes: number) {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
-export default function UploadPanel({ files, columns, stage, failure, progress, onAdd, onColumnsChange, onRemove, onProcess }: Props) {
+export default function UploadPanel({
+  files,
+  columns,
+  stage,
+  failure,
+  progress,
+  onAdd,
+  onColumnsChange,
+  onRemove,
+  onProcess,
+  apiKey,
+  rememberKey,
+  demoWithoutKey,
+  onApiKeyChange,
+  onRememberKeyChange,
+}: Props) {
   const [dragging, setDragging] = useState(false);
   const [rejected, setRejected] = useState<string[]>([]);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -213,6 +234,15 @@ export default function UploadPanel({ files, columns, stage, failure, progress, 
 
       <ColumnsInput columns={columns} disabled={busy} onChange={onColumnsChange} />
 
+      <ApiKeyInput
+        apiKey={apiKey}
+        remember={rememberKey}
+        disabled={busy}
+        demoWithoutKey={demoWithoutKey}
+        onChange={onApiKeyChange}
+        onRememberChange={onRememberKeyChange}
+      />
+
       <motion.button
         type="button"
         whileHover={{ scale: files.length && !busy ? 1.02 : 1 }}
@@ -223,7 +253,7 @@ export default function UploadPanel({ files, columns, stage, failure, progress, 
       >
         <span className="absolute inset-0 shimmer-bg animate-shimmer" />
         {busy ? <Loader2 className="relative h-5 w-5 animate-spin" /> : <Zap className="relative h-5 w-5" fill="currentColor" />}
-        <span className="relative">{busy ? "Extracting…" : "Extract data"}</span>
+        <span className="relative">{busy ? "Extracting…" : !apiKey.trim() && demoWithoutKey ? "Try with sample data" : "Extract data"}</span>
       </motion.button>
 
       <AnimatePresence>

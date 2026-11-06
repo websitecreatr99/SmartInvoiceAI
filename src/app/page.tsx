@@ -1,12 +1,12 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { motion } from "framer-motion";
-import { FileText, Quote, ScanText, Sparkles } from "lucide-react";
+import { FileText, Github, Quote, ScanText, Sparkles } from "lucide-react";
 import Background from "@/components/Background";
 import UploadPanel from "@/components/UploadPanel";
 import ResultsPanel from "@/components/ResultsPanel";
-import { createJob, getJob, parseExtraction } from "@/lib/api";
+import { createJob, getConfig, getJob, parseExtraction } from "@/lib/api";
 import type { Failure, Progress, ResultItem, Stage, StepKey } from "@/lib/types";
 
 // Workers run OCR and LLM extraction back to back, so the OCR → AI hand-off
@@ -16,6 +16,28 @@ const POLL_MS = 1500;
 const POLL_TIMEOUT_MS = 15 * 60 * 1000;
 // Ride out brief network or proxy hiccups while polling.
 const MAX_POLL_ERRORS = 3;
+
+// Source code link in the header. Override with NEXT_PUBLIC_GITHUB_URL (read at build time).
+const GITHUB_URL = process.env.NEXT_PUBLIC_GITHUB_URL ?? "https://github.com/kishannextq/hackathon";
+// Where "Remember on this device" keeps the key. Browser storage can be blocked, so every access is guarded.
+const KEY_STORAGE = "invoiceai.geminiApiKey";
+
+function storedKey(): string {
+  try {
+    return localStorage.getItem(KEY_STORAGE) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+function storeKey(key: string | null) {
+  try {
+    if (key) localStorage.setItem(KEY_STORAGE, key);
+    else localStorage.removeItem(KEY_STORAGE);
+  } catch {
+    // Private window or blocked storage: the key just isn't remembered.
+  }
+}
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -43,7 +65,29 @@ export default function Home() {
   const [progress, setProgress] = useState<Progress | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [failure, setFailure] = useState<Failure | null>(null);
+  const [apiKey, setApiKey] = useState("");
+  const [rememberKey, setRememberKey] = useState(false);
+  const [demoWithoutKey, setDemoWithoutKey] = useState(true);
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
+
+  useEffect(() => {
+    const saved = storedKey();
+    if (saved) {
+      setApiKey(saved);
+      setRememberKey(true);
+    }
+    getConfig().then((c) => setDemoWithoutKey(c.demo_without_key));
+  }, []);
+
+  const changeKey = (key: string) => {
+    setApiKey(key);
+    if (rememberKey) storeKey(key.trim() || null);
+  };
+
+  const changeRemember = (remember: boolean) => {
+    setRememberKey(remember);
+    storeKey(remember ? apiKey.trim() || null : null);
+  };
   const currentStep = useRef<StepKey>("upload");
 
   const goTo = (step: StepKey) => {
@@ -83,7 +127,7 @@ export default function Home() {
     setProgress(null);
     try {
       goTo("upload");
-      const job = await createJob(files, columns);
+      const job = await createJob(files, columns, apiKey);
       setJobFiles(job.files);
       setJobColumns(columns);
       setProgress({ done: 0, total: job.files.length });
@@ -115,6 +159,7 @@ export default function Home() {
             Invoice<span className="grad-text">AI</span>
           </span>
         </div>
+        <div className="flex items-center gap-3">
         <span className="hidden items-center gap-2 rounded-full border border-emerald-400/20 bg-emerald-400/10 px-3 py-1.5 text-xs font-medium text-emerald-200 sm:flex">
           <span className="relative flex h-2 w-2">
             <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
@@ -122,6 +167,15 @@ export default function Home() {
           </span>
           OCR + LLM pipeline
         </span>
+        <a
+          href={GITHUB_URL}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="flex items-center gap-2 rounded-full border border-white/15 bg-white/5 px-3.5 py-1.5 text-xs font-medium text-white/80 transition hover:border-white/30 hover:bg-white/10 hover:text-white"
+        >
+          <Github className="h-4 w-4" /> View code on GitHub
+        </a>
+        </div>
       </header>
 
       <main className="mx-auto max-w-7xl px-4 pb-20 sm:px-8">
@@ -173,7 +227,7 @@ export default function Home() {
           initial={{ opacity: 0, y: 30 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.3, duration: 0.7 }}
-          className="grid items-start gap-6 lg:grid-cols-[380px_1fr]"
+          className="grid items-start gap-6 lg:grid-cols-[380px_minmax(0,1fr)]"
         >
           <div className="lg:sticky lg:top-6">
             <UploadPanel
@@ -186,6 +240,11 @@ export default function Home() {
               onColumnsChange={setColumns}
               onRemove={(i) => setFiles((prev) => prev.filter((_, idx) => idx !== i))}
               onProcess={run}
+              apiKey={apiKey}
+              rememberKey={rememberKey}
+              demoWithoutKey={demoWithoutKey}
+              onApiKeyChange={changeKey}
+              onRememberKeyChange={changeRemember}
             />
           </div>
           <ResultsPanel results={results} files={jobFiles} columns={jobColumns} stage={stage} error={error} />

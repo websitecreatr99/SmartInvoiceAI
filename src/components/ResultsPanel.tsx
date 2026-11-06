@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { AlertTriangle, Check, Copy, Download, FileJson, LayoutGrid, Loader2, Table2 } from "lucide-react";
+import { AlertTriangle, Check, Copy, Download, FileJson, Info, LayoutGrid, Loader2, Table2 } from "lucide-react";
 import DocumentView from "./DocumentView";
 import FieldsTable, { tableColumns, toCsv } from "./FieldsTable";
 import JsonView from "./JsonView";
@@ -114,9 +114,10 @@ export default function ResultsPanel({ results, files, columns, stage, error }: 
   };
 
   const done = names.filter((n) => byName.has(n)).length;
+  const demo = results.some((r) => r.demo);
 
   return (
-    <section className="glass flex min-h-[600px] flex-col p-6">
+    <section className="glass flex min-h-[600px] min-w-0 flex-col p-6">
       <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="text-lg font-semibold tracking-tight">Extracted results</h2>
@@ -158,6 +159,23 @@ export default function ResultsPanel({ results, files, columns, stage, error }: 
           </div>
         </div>
       </div>
+
+      {demo && (
+        <div role="status" className="mb-5 flex gap-3 rounded-xl border border-amber-400/30 bg-amber-400/10 p-4 text-sm text-amber-50">
+          <Info className="mt-0.5 h-5 w-5 shrink-0 text-amber-300" />
+          <div>
+            <p className="font-semibold text-amber-200">This is sample (dummy) data</p>
+            <p className="mt-1 text-amber-50/80">
+              No Gemini API key was given, so nothing was read from your documents: every file shows the same made-up
+              purchase order. To extract real data, paste your Gemini API key on the left (free at{" "}
+              <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer" className="underline hover:text-white">
+                aistudio.google.com/apikey
+              </a>
+              ) and run it again.
+            </p>
+          </div>
+        </div>
+      )}
 
       {names.length > 1 && (
         <div className="scroll-thin mb-5 flex gap-2 overflow-x-auto pb-1">
