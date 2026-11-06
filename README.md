@@ -2,7 +2,7 @@
 
 The slow half of InvoiceAI: it takes documents off a RabbitMQ queue, reads them (**OCR with PaddleOCR** for PDFs and images, direct text extraction for everything else), runs **LLM extraction (Gemini)**, and publishes the result back. The API that accepts uploads and sends jobs here lives on the `fastapi` branch.
 
-Set `OCR_ENGINE=gemini` to have Gemini transcribe PDFs and images instead of PaddleOCR (`gemini_ocr.py`). That build needs no PaddleOCR, OpenCV or Poppler and runs in about 110 MB of RAM instead of roughly 3 GB, at the cost of two Gemini calls per document. The free deployment on the `lite` branch runs this worker in-process inside the API with `OCR_ENGINE=gemini`; it carries a copy of this branch's code in `lite/worker/` (refresh it with `scripts/sync_worker.sh` there).
+Set `OCR_ENGINE=gemini` to have Gemini transcribe PDFs and images instead of PaddleOCR (`gemini_ocr.py`). That build needs no PaddleOCR, OpenCV or Poppler and runs in about 110 MB of RAM instead of roughly 3 GB, at the cost of two Gemini calls per document. The free deployment on the `backend_lite` branch runs this worker in-process inside the API with `OCR_ENGINE=gemini`; it carries a copy of this branch's code in its `worker/` folder (refresh it with `scripts/sync_worker.sh` there).
 
 ## What it extracts
 
