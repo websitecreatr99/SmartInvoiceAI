@@ -149,6 +149,9 @@ Render's free services go to sleep after 15 minutes without requests, and the ne
 **In the browser:**
 1. Open your Vercel URL.
 2. Drop in the sample PDFs from `data/` on this branch, and click run. Optionally, first add columns such as `PO number`, `Quantity`, `Date ordered`.
+   - **Without an API key** in the UI's **Gemini API key** field, you get **sample (dummy) data** straight away, with a notice saying so. Nothing is read from the files and no Gemini quota is used.
+   - **With your key** pasted there, the documents are really read. The key is sent only with that upload and is never stored on the server. "Remember on this device" keeps it in this browser only.
+   - The server's own `GOOGLE_API_KEY` is used for keyless visitors only if you set `DEMO_WITHOUT_KEY=0` on Render.
 3. The Table, Visual and JSON views fill in as each file finishes. Every value links to the document line it was read from.
 
 **From a terminal** (this goes through Vercel, like the browser does):
@@ -259,6 +262,7 @@ The slow work (OCR + LLM extraction) runs on the `worker` branch's pods:
 | `CORS_ORIGINS` | `http://localhost:3000` | Comma-separated allowed origins |
 | `RESULT_CONSUMER` | 1 | `0` disables the result consumer (tests) |
 | `INLINE_WORKER` | 0 | `1` processes jobs inside the API process (see below) instead of via RabbitMQ |
+| `DEMO_WITHOUT_KEY` | 1 | Jobs sent without the caller's own Gemini key (`X-Gemini-Api-Key` header, the UI's API key field) get sample data at once (`demo.py`, marked `"demo": true`) instead of using the workers' `GOOGLE_API_KEY`. `0` processes them with the workers' key; `docker-compose.yml` and `k8s/` set `0` |
 
 ### 🆓 Single free service (`lite` branch)
 
