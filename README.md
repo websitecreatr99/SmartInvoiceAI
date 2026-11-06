@@ -31,7 +31,8 @@ Set `OCR_ENGINE=gemini` to have Gemini transcribe PDFs and images instead of Pad
 - **A poison document can't take the fleet down.** `invoice.jobs` is a quorum queue that counts deliveries. When a message has already crashed, OOM-killed or hung pods `MAX_REDELIVERIES` times, the next pod moves it to `invoice.jobs.dlq` and publishes an error result, so the API still hears back.
 - **Every job is bounded.** Files over `MAX_FILE_MB` and PDFs over `MAX_PAGES` are refused before OCR; PDFs are rendered one page at a time; Gemini calls time out after `LLM_TIMEOUT_SECONDS`. A job still running after `JOB_TIMEOUT_SECONDS` is treated as hung: the worker exits (nonzero) so the pod restarts and the delivery counts towards `MAX_REDELIVERIES`.
 - **Customer data stays out of logs and traces.** Prompts, OCR text and LLM output are never logged, validation errors list field paths without values, and Langfuse receives timings, tokens and cost only (`LANGFUSE_CAPTURE_CONTENT=true` to opt in, e.g. in staging).
-- **Autoscaling** adds pods while the queue is backed up and removes them when it drains (`k8s/worker-keda.yaml`).
+- **Autoscaling** adds pods while the queue is backed up and removes them when it drains (`k8s/worker-keda.yaml`; on AWS, step scaling on the Amazon MQ queue depth, see the `infra` branch).
+- **Scale-in never kills a busy task on AWS.** On ECS (where `ECS_AGENT_URI` is set) the worker turns on ECS task scale-in protection while it processes a job and turns it off after the ack. The protection lapses by itself after `JOB_TIMEOUT_SECONDS` + 5 minutes if the worker dies.
 
 ## Message format
 
@@ -86,7 +87,7 @@ Kubernetes:
 | `JOBS_QUEUE` / `RESULTS_QUEUE` | `invoice.jobs` / `invoice.results` | Queue names (must match the API) |
 | `RETRY_QUEUE` / `DEAD_LETTER_QUEUE` | `<jobs>.retry` / `<jobs>.dlq` | Retry and dead-letter queues (must match the API) |
 | `WORKER_PREFETCH` | 1 | Documents a pod holds at once; keep 1 for even spreading |
-| `GEMINI_MODEL` | `gemini-2.5-flash` | Model used for extraction. Gemini 2.5 models are closed to new API keys; with a new key use e.g. `gemini-3.5-flash-lite` (the `gemini-3.5-flash` free tier allows only 20 requests a day) |
+| `GEMINI_MODEL` | `gemini-3.5-flash-lite` | Model used for extraction (Gemini 2.5 models are closed to new API keys; the `gemini-3.5-flash` free tier allows only 20 requests a day) |
 | `OCR_ENGINE` | `paddle` | `paddle` (PaddleOCR) or `gemini` (Gemini reads PDFs and images; install `requirements-gemini.txt`) |
 | `GEMINI_OCR_MODEL` | `GEMINI_MODEL` | Model used for OCR when `OCR_ENGINE=gemini`; a different model gets its own free-tier quota (e.g. `gemini-3.1-flash-lite`) |
 | `GEMINI_OCR_TIMEOUT_SECONDS` | 300 | Per Gemini OCR call |
@@ -123,7 +124,7 @@ Dashboards, alerts and log collection live on the `tracking` branch. This worker
   | `invoiceai_llm_calls_total` / `invoiceai_llm_latency_seconds` / `invoiceai_llm_tokens_total` / `invoiceai_llm_cost_usd_total` | Gemini calls, latency, tokens and estimated USD cost, by model |
 
 - **Langfuse** (set `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_HOST`): one trace per document, grouped into a session per job, with spans for each stage and the Gemini generation including tokens, cost and latency.
-- Cost is estimated from token usage at `LLM_INPUT_USD_PER_1M` / `LLM_OUTPUT_USD_PER_1M` (defaults: Gemini 2.5 Flash list price, $0.30 / $2.50); update them if pricing or the model changes.
+- Cost is estimated from token usage at `LLM_INPUT_USD_PER_1M` / `LLM_OUTPUT_USD_PER_1M` (defaults: $0.30 / $2.50, the Gemini 2.5 Flash list price). Set them to the current price of the model in `GEMINI_MODEL`, or the cost metric is only an estimate.
 
 ---
 
@@ -133,7 +134,7 @@ Unit tests (OCR and LLM stubbed): `pip install -r requirements-dev.txt && pytest
 
 Smoke test against a live broker and running worker: `python scripts/smoke_test.py`.
 
-GitHub Actions (`.github/workflows/ci.yml`) on `worker`: unit tests → image build → worker container + real RabbitMQ round-trip → publish `ghcr.io/<owner>/<repo>-worker` (pushes only).
+GitHub Actions (`.github/workflows/ci.yml`) on `worker`: unit tests → image build → worker container + real RabbitMQ round-trip → publish `ghcr.io/<owner>/<repo>-worker` (pushes only). Once the `infra` branch's Terraform is applied and the repository variable `AWS_DEPLOY_ROLE_ARN` is set (its `github_deploy_role_arn` output), pushes also build the image into ECR and roll it out to ECS (`deploy-aws` job; optional variables `AWS_REGION`, `ECS_CLUSTER`). Without that variable the job is skipped.
 
 ---
 

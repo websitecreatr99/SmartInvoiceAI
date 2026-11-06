@@ -12,6 +12,7 @@ import sys
 import tempfile
 import threading
 import time
+import urllib.request
 
 import pika
 from pika.exceptions import AMQPConnectionError
@@ -27,7 +28,8 @@ logger = setup_logger(__name__)
 
 RABBITMQ_URL = os.getenv("RABBITMQ_URL", "amqp://guest:guest@localhost:5672/%2F")
 PREFETCH = int(os.getenv("WORKER_PREFETCH", "1"))
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+# Gemini 2.5 models are closed to new API keys.
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
 # "paddle": PaddleOCR (needs ~3 GB RAM). "gemini": Gemini transcribes the document (gemini_ocr.py).
 OCR_ENGINE = os.getenv("OCR_ENGINE", "paddle").strip().lower()
 ALIVE_FILE = os.getenv("ALIVE_FILE", os.path.join(tempfile.gettempdir(), "worker-alive"))
@@ -117,6 +119,53 @@ def touch_alive():
         f.write(str(time.time()))
 
 
+class ScaleInProtection:
+    """ECS task scale-in protection while a job runs, so the autoscaler never stops a busy task.
+
+    Active only on ECS, where the agent sets ECS_AGENT_URI; elsewhere (k8s, Docker, tests) it does
+    nothing. Failures are logged and ignored: protection is a safety net, not a requirement.
+    """
+
+    def __init__(self, agent_uri=None):
+        self.url = f"{agent_uri}/task-protection/v1/state" if agent_uri else None
+        self.lock = threading.Lock()
+        self.in_job = False
+
+    def _put(self, enabled: bool):
+        body = {"ProtectionEnabled": enabled}
+        if enabled:
+            # Lapses on its own if the worker dies mid-job; a hung job exits after JOB_TIMEOUT_SECONDS.
+            body["ExpiresInMinutes"] = JOB_TIMEOUT_SECONDS // 60 + 5
+        request = urllib.request.Request(
+            self.url, data=json.dumps(body).encode(), method="PUT", headers={"Content-Type": "application/json"}
+        )
+        try:
+            urllib.request.urlopen(request, timeout=5).close()
+        except Exception as e:
+            logger.warning(f"Could not set ECS scale-in protection to {enabled}: {e}")
+
+    def job_started(self):
+        with self.lock:
+            self.in_job = True
+            if self.url:
+                self._put(True)
+
+    def job_finished(self):
+        """Called after the ack. Runs in the background so the connection thread never waits on HTTP."""
+        self.in_job = False
+        if self.url:
+            threading.Thread(target=self._release, daemon=True).start()
+
+    def _release(self):
+        with self.lock:
+            # The next job may already have started (and re-enabled protection); leave it on then.
+            if not self.in_job:
+                self._put(False)
+
+
+PROTECTION = ScaleInProtection(os.getenv("ECS_AGENT_URI"))
+
+
 def parse_job(body) -> dict:
     try:
         payload = json.loads(body)
@@ -157,6 +206,7 @@ class Worker:
 
     def work(self, delivery_tag, body):
         payload = None
+        PROTECTION.job_started()
         try:
             payload = json.loads(body)
             logger.info(f"Processing job {payload.get('job_id')} file {payload.get('filename')}")
@@ -181,6 +231,7 @@ class Worker:
         if result.pop("retryable", False) and attempt < MAX_ATTEMPTS:
             self.publish(queues.RETRY_QUEUE, json.dumps({**payload, "attempt": attempt + 1}))
             self.channel.basic_ack(delivery_tag)
+            PROTECTION.job_finished()
             telemetry.JOBS_RETRIED.inc()
             logger.warning(
                 f"Job {result.get('job_id')} attempt {attempt}/{MAX_ATTEMPTS} failed temporarily; "
@@ -189,6 +240,7 @@ class Worker:
             return
         self.publish(queues.RESULTS_QUEUE, json.dumps(result))
         self.channel.basic_ack(delivery_tag)
+        PROTECTION.job_finished()
         logger.info(f"Finished job {result.get('job_id')} file {result.get('filename')} ok={result.get('ok')}")
 
     def give_up(self, delivery_tag, body, redeliveries):
