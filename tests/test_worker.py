@@ -372,3 +372,39 @@ def test_agent_errors_never_break_a_job(monkeypatch):
 
     monkeypatch.setattr(worker.urllib.request, "urlopen", boom)
     worker.ScaleInProtection("http://agent").job_started()  # logs a warning, doesn't raise
+
+
+def test_job_key_is_used_for_that_job_only():
+    from src import credentials
+
+    seen = []
+
+    class KeyModel(FakeModel):
+        def extract_with_gemini(self, ocr_text, callbacks=None):
+            seen.append(credentials.llm_kwargs())
+            return super().extract_with_gemini(ocr_text, callbacks)
+
+    model = KeyModel({"extraction": [{"header": {"purchase_order_number": "42"}, "line_items": []}]})
+    job = {"job_id": "j1", "filename": "a.pdf", "file_b64": PDF, "api_key": "user-key-123"}
+    result = worker.process_message(job, model, fake_ocr, DataExtractionHandler())
+
+    assert result["ok"] is True
+    assert seen == [{"google_api_key": "user-key-123"}]
+    assert credentials.llm_kwargs() == {}  # reset once the job is done
+    assert "user-key-123" not in json.dumps(result)
+
+
+def test_job_without_key_uses_the_workers_own_key():
+    from src import credentials
+
+    with credentials.use_api_key(None):
+        assert credentials.llm_kwargs() == {}
+
+
+def test_rejected_key_becomes_a_clear_error():
+    from src import credentials
+
+    with credentials.use_api_key("bad-key"):
+        with pytest.raises(credentials.InvalidApiKey, match="rejected your API key"):
+            credentials.check_rejected_key(RuntimeError("400 API key not valid. Please pass a valid API key."))
+    credentials.check_rejected_key(RuntimeError("something else"))  # other errors pass through
