@@ -28,12 +28,17 @@ class FakeGemini(BaseChatModel):
     model: str = "fake-gemini"
     timeout: Optional[float] = None
     max_retries: int = 0
+    temperature: Optional[float] = None
+    # The job's own key (from the UI). A key starting with "bad" is refused the way Gemini refuses one.
+    google_api_key: Optional[str] = None
 
     @property
     def _llm_type(self) -> str:
         return "fake-gemini"
 
     def _generate(self, messages: List[BaseMessage], stop=None, run_manager=None, **kwargs: Any) -> ChatResult:
+        if (self.google_api_key or "").startswith("bad"):
+            raise ValueError("400 API key not valid. Please pass a valid API key. [reason: API_KEY_INVALID]")
         prompt = "\n".join(str(m.content) for m in messages)
         time.sleep(random.uniform(*map(float, os.getenv("FAKE_LLM_LATENCY", "0.3,1.2").split(","))))
         text = answer_columns(prompt) if "Columns to extract:" in prompt else answer_invoice(prompt)

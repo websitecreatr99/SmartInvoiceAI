@@ -18,7 +18,7 @@ import pika
 from pika.exceptions import AMQPConnectionError
 
 import telemetry
-from src import queues, sources, storage
+from src import credentials, queues, sources, storage
 from src.common import DataExtractionHandler
 from src.document_reader import read_document
 from src.errors import TransientError
@@ -49,6 +49,13 @@ def requested_columns(payload: dict) -> list:
 
 def process_message(payload: dict, model_handler, read_document, handler: DataExtractionHandler,
                     download=storage.download) -> dict:
+    # The user's own Gemini key, when the job carries one, replaces GOOGLE_API_KEY for this job only.
+    with credentials.use_api_key(payload.get("api_key")):
+        return _process_message(payload, model_handler, read_document, handler, download)
+
+
+def _process_message(payload: dict, model_handler, read_document, handler: DataExtractionHandler,
+                     download=storage.download) -> dict:
     """Turn one job message into one result message. Never raises: failures become error results,
     marked `retryable` when a later attempt could succeed.
 

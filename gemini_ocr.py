@@ -14,6 +14,7 @@ from langchain_core.messages import HumanMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
 
 from ocr_pipeline import MAX_PAGES, TRANSIENT_LLM_ERRORS
+from src import credentials
 from src.errors import TransientError
 from src.logger_config import setup_logger
 
@@ -92,7 +93,8 @@ def parse_pages(text: str) -> List[List[Tuple[str, Optional[float]]]]:
 def ocr_pages(path: str, output_root: str = "output") -> List[List[Tuple[str, Optional[float]]]]:
     data, mime_type = _load(path)
     llm = ChatGoogleGenerativeAI(
-        model=GEMINI_OCR_MODEL, timeout=OCR_TIMEOUT_SECONDS, max_retries=OCR_MAX_RETRIES, temperature=0
+        model=GEMINI_OCR_MODEL, timeout=OCR_TIMEOUT_SECONDS, max_retries=OCR_MAX_RETRIES, temperature=0,
+        **credentials.llm_kwargs(),
     )
     message = HumanMessage(content=[
         {"type": "text", "text": PROMPT},
@@ -102,6 +104,9 @@ def ocr_pages(path: str, output_root: str = "output") -> List[List[Tuple[str, Op
         response = llm.invoke([message])
     except TRANSIENT_LLM_ERRORS as e:
         raise TransientError(f"Gemini unavailable: {type(e).__name__}: {e}") from e
+    except Exception as e:
+        credentials.check_rejected_key(e)
+        raise
     content = response.content
     if isinstance(content, list):  # some models return a list of parts
         content = "".join(p if isinstance(p, str) else p.get("text", "") for p in content)
