@@ -4,7 +4,7 @@ Next.js UI for InvoiceAI. Drop in invoices, purchase orders or other business do
 
 ## Running
 
-The app proxies `/api/*` to the FastAPI app (`app.py` on the `fastapi` branch) at `http://127.0.0.1:5000`. Set `BACKEND_URL` to point elsewhere. Processing needs the rest of the stack (RabbitMQ and at least one worker, see the `fastapi` branch README), or the single-service build on the `lite` branch, which needs neither.
+The app proxies `/api/*` to the FastAPI app (`app.py` on the `fastapi` branch) at `http://127.0.0.1:5000`. Set `BACKEND_URL` to point elsewhere. Processing needs the rest of the stack (RabbitMQ and at least one worker, see the `fastapi` branch README), or the single-service build on the `backend_lite` branch, which needs neither.
 
 Next.js is pinned to 15.5.29; Vercel refuses to deploy the vulnerable 15.5.4 it was on before.
 
@@ -46,7 +46,7 @@ npx vercel link                # once per checkout: pick the existing hackathon-
 npx vercel deploy --prod --build-env BACKEND_URL=https://hackathon-elnx.onrender.com
 ```
 
-The backend is the `lite` branch on Render's free tier, which sleeps after 15 minutes without traffic; the first request after that takes 20 to 60 s.
+The backend is the `backend_lite` branch on Render's free tier, which sleeps after 15 minutes without traffic; the first request after that takes 20 to 60 s.
 
 ## How it works
 
