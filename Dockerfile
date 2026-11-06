@@ -12,7 +12,7 @@ WORKDIR /app
 COPY requirements.txt ./
 RUN pip install -r requirements.txt
 
-COPY app.py broker.py job_store.py metrics.py object_store.py queues.py ./
+COPY app.py broker.py demo.py job_store.py metrics.py object_store.py queues.py ./
 
 RUN useradd --create-home --uid 1000 appuser \
     && mkdir -p data storage \
