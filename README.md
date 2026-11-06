@@ -2,12 +2,12 @@
 
 InvoiceAI extracts **structured data** from **unstructured business documents** (invoices, purchase orders and similar) using **OCR + an LLM (Gemini)**. Either it fills the invoice schema (header + line items), or it pulls just the columns you name. Every value cites the document line it came from.
 
-This is the **`lite` branch**: the `fastapi` branch's API plus a copy of the worker that runs inside the API process, so the whole backend is one small service with no RabbitMQ. It is what runs the free live deployment (see [Single free service](#-single-free-service-lite-branch)). The other parts of the system live on their own branches:
+This is the **`backend_lite` branch**: the `fastapi` branch's API plus a copy of the worker that runs inside the API process, so the whole backend is one small service with no RabbitMQ. It is what runs the free live deployment (see [Single free service](#-single-free-service-backend_lite-branch)). The other parts of the system live on their own branches:
 
 | Branch | What |
 |--------|------|
 | `fastapi` | HTTP API: accepts uploads, queues work, collects results |
-| `lite` (this one) | `fastapi` + the worker in one process, no RabbitMQ: the free deployment on Render |
+| `backend_lite` (this one) | `fastapi` + the worker in one process, no RabbitMQ: the free deployment on Render |
 | `worker` | OCR + LLM extraction pods that consume the queue (PaddleOCR, or Gemini with `OCR_ENGINE=gemini`) |
 | `frontend` | Next.js web UI (talks to this API through `/api/*`), deployed on Vercel |
 | `tracking` | Prometheus, Loki, Grafana and Langfuse |
@@ -22,12 +22,12 @@ To run your own copy online for free, see [Deploy your own copy for free](#deplo
 ## Deploy your own copy for free (Render + Vercel)
 
 This puts the whole system online at no cost and needs no credit card:
-- **Backend on Render:** the `lite` branch. It is the API and the worker in one service, with Gemini reading the documents, so there is no RabbitMQ and no PaddleOCR. It uses about 110 MB of RAM.
+- **Backend on Render:** the `backend_lite` branch. It is the API and the worker in one service, with Gemini reading the documents, so there is no RabbitMQ and no PaddleOCR. It uses about 110 MB of RAM.
 - **Frontend on Vercel:** the `frontend` branch.
 
 The browser only ever talks to Vercel, which forwards `/api/*` to Render.
 
-    Browser ──► Vercel (frontend branch) ──/api/*──► Render (lite branch: API + worker) ──► Gemini API
+    Browser ──► Vercel (frontend branch) ──/api/*──► Render (backend_lite branch: API + worker) ──► Gemini API
 
 It takes about 20 minutes. The Render build takes 5–10 of those.
 
@@ -56,7 +56,7 @@ Render and Vercel can only deploy repositories your GitHub account can see.
 
 3. Optionally, in your repo's **Settings → General → Default branch**, choose `fastapi`.
 
-If you were added to this repository, a fork also works: **Fork**, with "Copy the main branch only" **unchecked**, so you get `lite` and `frontend`.
+If you were added to this repository, a fork also works: **Fork**, with "Copy the main branch only" **unchecked**, so you get `backend_lite` and `frontend`.
 
 ### Step 2: Create a Gemini API key
 
@@ -73,13 +73,13 @@ The service uses two models: `gemini-3.5-flash-lite` for extraction and `gemini-
 2. When asked, let Render's GitHub app access your `invoiceai` repo. You can change this later under **Account settings → Git providers**.
 3. Create the service. Use the Blueprint if your account has it; otherwise set it up by hand.
 
-   **A. Blueprint (if your dashboard has New → Blueprint):** choose **New → Blueprint**, then your repo and branch **`lite`**. Render reads `render.yaml` and asks for `GOOGLE_API_KEY`. Paste the key, then click **Apply**.
+   **A. Blueprint (if your dashboard has New → Blueprint):** choose **New → Blueprint**, then your repo and branch **`backend_lite`**. Render reads `render.yaml` and asks for `GOOGLE_API_KEY`. Paste the key, then click **Apply**.
 
    **B. By hand (if there's no Blueprint option):** choose **New → Web Service**, pick your repo, and fill in:
 
    | Field | Value |
    |---|---|
-   | Branch | `lite` |
+   | Branch | `backend_lite` |
    | Language / Runtime | `Docker` |
    | Dockerfile Path | `./Dockerfile.lite` |
    | Docker Build Context | `.` |
@@ -169,7 +169,7 @@ A document usually takes 10–40 s. The first request after the service has been
 
 | You changed | What to do |
 |---|---|
-| Backend code | Push to `lite`; Render redeploys by itself. Worker code is a copy: change it on `worker`, then run `scripts/sync_worker.sh` on `lite` and push |
+| Backend code | Push to `backend_lite`; Render redeploys by itself. Worker code is a copy: change it on `worker`, then run `scripts/sync_worker.sh` on `backend_lite` and push |
 | Frontend code | **CLI setup:** run the `npx vercel deploy --prod --build-env BACKEND_URL=…` command again. **Dashboard setup:** push to `frontend` |
 | Render URL | Redeploy the frontend: `BACKEND_URL` is compiled into the build |
 | Gemini key | Render → your service → **Environment** → edit `GOOGLE_API_KEY` → Save (it redeploys) |
@@ -178,7 +178,7 @@ A document usually takes 10–40 s. The first request after the service has been
 
 | Symptom | Cause and fix |
 |---|---|
-| Render build: `open Dockerfile.lite: no such file or directory` | The service is building the wrong branch. Set the branch to **`lite`** in Render → Settings → Build & Deploy |
+| Render build: `open Dockerfile.lite: no such file or directory` | The service is building the wrong branch. Set the branch to **`backend_lite`** in Render → Settings → Build & Deploy |
 | Render shows no **Blueprint** option, or doesn't list your repo | Use the **By hand** setup in Step 3, and give Render's GitHub app access to your repo (Account settings → Git providers) |
 | The first request hangs for about a minute, then works | The free service was asleep. Add the UptimeRobot monitor (Step 6) |
 | A file fails with a 404 `models/... is not found` | The model name is wrong or closed to your key. Use the two Flash-Lite models above |
@@ -264,15 +264,15 @@ The slow work (OCR + LLM extraction) runs on the `worker` branch's pods:
 | `INLINE_WORKER` | 0 | `1` processes jobs inside the API process (see below) instead of via RabbitMQ |
 | `DEMO_WITHOUT_KEY` | 1 | Jobs sent without the caller's own Gemini key (`X-Gemini-Api-Key` header, the UI's API key field) get sample data at once (`demo.py`, marked `"demo": true`) instead of using the workers' `GOOGLE_API_KEY`. `0` processes them with the workers' key; `docker-compose.yml` and `k8s/` set `0` |
 
-### 🆓 Single free service (`lite` branch)
+### 🆓 Single free service (`backend_lite` branch)
 
 `Dockerfile.lite` runs everything as one small service: the API plus the worker's pipeline in-process (`INLINE_WORKER=1`, `inline_worker.py`), with Gemini transcribing documents instead of PaddleOCR (`OCR_ENGINE=gemini`). No RabbitMQ, about 110 MB of RAM, so it fits Render's free web service.
 
-1. Render → **New → Blueprint** → this repo, branch `lite`. `render.yaml` defines the service; enter `GOOGLE_API_KEY` when asked. If your account has no Blueprint option, create a **Web Service** instead: runtime Docker, branch `lite`, Dockerfile path `./Dockerfile.lite`, health check `/health`, instance type Free, and the environment variables listed in `render.yaml`.
+1. Render → **New → Blueprint** → this repo, branch `backend_lite`. `render.yaml` defines the service; enter `GOOGLE_API_KEY` when asked. If your account has no Blueprint option, create a **Web Service** instead: runtime Docker, branch `backend_lite`, Dockerfile path `./Dockerfile.lite`, health check `/health`, instance type Free, and the environment variables listed in `render.yaml`.
 2. Free services sleep after 15 minutes without requests: add a free UptimeRobot HTTP monitor on `https://<service>.onrender.com/health` every 5 minutes.
 3. Point the frontend at it: deploy the `frontend` branch to Vercel with `BACKEND_URL=https://<service>.onrender.com` (a build-time variable; see that branch's README), and put the Vercel URL in `CORS_ORIGINS`.
 
-The live service redeploys automatically on every push to `lite`. It uses `GEMINI_MODEL=gemini-3.5-flash-lite` for extraction and `GEMINI_OCR_MODEL=gemini-3.1-flash-lite` for OCR (Gemini 2.5 models are closed to new API keys). Flash-Lite occasionally returns output that fails validation, so the in-process worker retries such a document once.
+The live service redeploys automatically on every push to `backend_lite`. It uses `GEMINI_MODEL=gemini-3.5-flash-lite` for extraction and `GEMINI_OCR_MODEL=gemini-3.1-flash-lite` for OCR (Gemini 2.5 models are closed to new API keys). Flash-Lite occasionally returns output that fails validation, so the in-process worker retries such a document once.
 
 `worker/` is a copy of the worker branch's pipeline: refresh it with `scripts/sync_worker.sh`. Trade-offs against the RabbitMQ setup: one document at a time, no redelivery if the process restarts mid-job, job history is lost on restart, and Gemini's free tier caps the documents per day (each document is two requests; `GEMINI_OCR_MODEL` and `GEMINI_MODEL` use separate quotas).
 
