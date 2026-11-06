@@ -49,15 +49,28 @@ def on_result(result: dict) -> bool:
     return True
 
 
+# INLINE_WORKER=1: process jobs inside this process (inline_worker.py) instead of via RabbitMQ.
+INLINE_WORKER = os.getenv("INLINE_WORKER", "0") == "1"
+inline = None
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    global inline
     consumer = None
-    if os.getenv("RESULT_CONSUMER", "1") == "1":
+    if INLINE_WORKER:
+        from inline_worker import InlineWorker
+
+        inline = InlineWorker(lambda result: on_result(result))
+        inline.warm_up()
+    elif os.getenv("RESULT_CONSUMER", "1") == "1":
         consumer = broker.ResultConsumer(lambda result: on_result(result))
         consumer.start()
     yield
     if consumer:
         consumer.stop()
+    if inline:
+        inline.stop()
 
 
 app = FastAPI(
@@ -110,6 +123,11 @@ def submit_job(files: List[Tuple[str, bytes]], endpoint: str, columns: Optional[
     messages = [
         {"job_id": job_id, "filename": name, **ref, "columns": columns} for (name, _), ref in zip(files, refs)
     ]
+    if inline:
+        inline.submit(messages)
+        metrics.JOBS_SUBMITTED.labels(endpoint).inc()
+        metrics.PDFS_SUBMITTED.inc(len(files))
+        return job_id
     try:
         broker.publish_jobs(messages)
     except AMQPError as e:

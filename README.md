@@ -79,6 +79,17 @@ The slow work (OCR + LLM extraction) runs on the `worker` branch's pods:
 | `PROCESS_TIMEOUT` | 600 | Seconds `/process` waits before returning the `job_id` to poll |
 | `CORS_ORIGINS` | `http://localhost:3000` | Comma-separated allowed origins |
 | `RESULT_CONSUMER` | 1 | `0` disables the result consumer (tests) |
+| `INLINE_WORKER` | 0 | `1` processes jobs inside the API process (see below) instead of via RabbitMQ |
+
+### 🆓 Single free service (`lite` branch)
+
+`Dockerfile.lite` runs everything as one small service: the API plus the worker's pipeline in-process (`INLINE_WORKER=1`, `inline_worker.py`), with Gemini transcribing documents instead of PaddleOCR (`OCR_ENGINE=gemini`). No RabbitMQ, about 110 MB of RAM, so it fits Render's free web service.
+
+1. Render → **New → Blueprint** → this repo, branch `lite`. `render.yaml` defines the service; enter `GOOGLE_API_KEY` when asked.
+2. Free services sleep after 15 minutes without requests: add a free UptimeRobot HTTP monitor on `https://<service>.onrender.com/health` every 5 minutes.
+3. Point the frontend at it: `BACKEND_URL=https://<service>.onrender.com` on Vercel.
+
+`worker/` is a copy of the worker branch's pipeline: refresh it with `scripts/sync_worker.sh`. Trade-offs against the RabbitMQ setup: one document at a time, no redelivery if the process restarts mid-job, job history is lost on restart, and Gemini's free tier caps the documents per day (each document is two requests; `GEMINI_OCR_MODEL` and `GEMINI_MODEL` use separate quotas).
 
 ### ☸️ Kubernetes
 
