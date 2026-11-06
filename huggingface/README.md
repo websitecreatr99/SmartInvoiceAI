@@ -1,6 +1,6 @@
 # InvoiceAI for free: Vercel + Hugging Face Spaces
 
-> **Note:** Hugging Face Docker Spaces now need a paid plan, so this bundle no longer runs for free. The free deployment in use is the `lite` branch on Render (see its README).
+> **Note:** Hugging Face Docker Spaces now need a paid plan, so this bundle no longer runs for free. The free deployment in use is the `backend_lite` branch on Render (see its README).
 
 ```
 Browser ─► Vercel (frontend branch, Next.js)
