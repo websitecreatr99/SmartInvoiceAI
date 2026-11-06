@@ -24,6 +24,19 @@ Open [http://localhost:3000](http://localhost:3000).
 
 Checks: `npx tsc --noEmit`, `npm run lint`, `npm run build`.
 
+## Docker and AWS
+
+`Dockerfile` builds a standalone Next.js server on port 3000. `BACKEND_URL` is compiled into the `/api/*` rewrites, so pass it at build time:
+
+```bash
+docker build --build-arg BACKEND_URL=http://api:5000 -t invoiceai-frontend .
+docker run -p 3000:3000 invoiceai-frontend
+```
+
+Only `/api/jobs`, `/api/jobs/{id}` and `/api/health` are proxied, so the API's `/metrics` and `/docs` aren't reachable through the site.
+
+On AWS (the `infra` branch) the frontend runs on ECS behind the load balancer and proxies to the API at `http://api.invoiceai.local:5000` (private DNS). CI (`.github/workflows/ci.yml`) typechecks, lints, builds and smoke-tests the image; once `AWS_DEPLOY_ROLE_ARN` is set as a repository variable, pushes also deploy to ECS (override the backend with the `FRONTEND_BACKEND_URL` variable).
+
 ## Deploying (Vercel)
 
 The live site, https://hackathon-frontend-gamma-seven.vercel.app, is a Vercel project deployed from this branch with the Vercel CLI. It isn't connected to Git, so pushing doesn't redeploy it. `BACKEND_URL` is baked in at build time, so pass it on every deploy:
