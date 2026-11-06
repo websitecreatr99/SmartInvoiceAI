@@ -132,15 +132,11 @@
 
 import os
 import re
-import cv2
-from pdf2image import convert_from_path
-from paddleocr import PaddleOCR
 from typing import List, Tuple
 import json
-import ollama
-import openai
 from typing import Optional
-from langchain_ollama import OllamaLLM
+# PaddleOCR, OpenCV, pdf2image and Ollama are imported where they are used, so the Gemini-only build
+# (OCR_ENGINE=gemini, requirements-gemini.txt) can import ModelHandler without them installed.
 from langchain.prompts import PromptTemplate
 from langchain.output_parsers import PydanticOutputParser
 from langchain_google_genai import ChatGoogleGenerativeAI
@@ -151,7 +147,6 @@ from src.common import ColumnExtraction, DataExtractionHandler, Extraction
 from langchain.output_parsers import OutputFixingParser
 from langchain_core.exceptions import OutputParserException
 from google.api_core import exceptions as google_errors
-from pdf2image import pdfinfo_from_path
 from src.errors import TransientError
 from src.logger_config import setup_logger
 
@@ -221,7 +216,9 @@ class ModelHandler:
 
     def extract_with_llama(self, ocr_text: str) -> Optional[dict]:
         """Extracts structured data using Ollama (llama model) + Pydantic parser"""
-        try:            
+        try:
+            from langchain_ollama import OllamaLLM
+
             llama_llm = OllamaLLM(model=self.model)
             
             chain = self.prompt_template | llama_llm | self.parser  # ensures parsing
@@ -354,6 +351,8 @@ def pdf_to_images(pdf_path: str, output_root: str = "output") -> List[str]:
     Returns:
         List[str]: List of saved image file paths.
     """
+    from pdf2image import convert_from_path, pdfinfo_from_path
+
     page_count = pdfinfo_from_path(pdf_path, timeout=PDF_PAGE_TIMEOUT_SECONDS)["Pages"]
     if MAX_PAGES and page_count > MAX_PAGES:
         raise ValueError(f"Document has {page_count} pages; the limit is {MAX_PAGES}")
@@ -389,6 +388,8 @@ def preprocess_image(img_path: str) -> str:
     Returns:
         str: Path to preprocessed image.
     """
+    import cv2
+
     image = cv2.imread(img_path, cv2.IMREAD_COLOR)
 
     # Convert to grayscale
@@ -409,6 +410,8 @@ def preprocess_image(img_path: str) -> str:
 
 def image_to_png(image_path: str, output_root: str = "output") -> str:
     """Copy an uploaded image (jpg, tiff, ...) to a PNG page so it runs through the same OCR steps as PDF pages."""
+    import cv2
+
     image = cv2.imread(image_path, cv2.IMREAD_COLOR)
     if image is None:
         raise ValueError(f"Could not read image {os.path.basename(image_path)}")
@@ -424,8 +427,10 @@ def image_to_png(image_path: str, output_root: str = "output") -> str:
 # STEP 3: Run PaddleOCR
 # ----------------------------
 @lru_cache(maxsize=1)
-def _ocr_engine() -> PaddleOCR:
+def _ocr_engine():
     # Loading the models takes seconds; build once per process instead of once per page.
+    from paddleocr import PaddleOCR
+
     return PaddleOCR(use_textline_orientation=True, lang='en')
 
 

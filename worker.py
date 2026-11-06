@@ -28,6 +28,8 @@ logger = setup_logger(__name__)
 RABBITMQ_URL = os.getenv("RABBITMQ_URL", "amqp://guest:guest@localhost:5672/%2F")
 PREFETCH = int(os.getenv("WORKER_PREFETCH", "1"))
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+# "paddle": PaddleOCR (needs ~3 GB RAM). "gemini": Gemini transcribes the document (gemini_ocr.py).
+OCR_ENGINE = os.getenv("OCR_ENGINE", "paddle").strip().lower()
 ALIVE_FILE = os.getenv("ALIVE_FILE", os.path.join(tempfile.gettempdir(), "worker-alive"))
 METRICS_PORT = int(os.getenv("METRICS_PORT", "9100"))
 # Tries per job when it fails for a temporary reason (Gemini 429/5xx, storage outage).
@@ -126,7 +128,12 @@ def parse_job(body) -> dict:
 class Worker:
     def __init__(self):
         # Heavy imports (PaddleOCR, LangChain) happen once per process.
-        from ocr_pipeline import ModelHandler, ocr_pages
+        from ocr_pipeline import ModelHandler
+
+        if OCR_ENGINE == "gemini":
+            from gemini_ocr import ocr_pages
+        else:
+            from ocr_pipeline import ocr_pages
 
         self.model_handler = ModelHandler(GEMINI_MODEL)
         self.read_document = functools.partial(read_document, ocr_pages=ocr_pages)
