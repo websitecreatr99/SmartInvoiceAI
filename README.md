@@ -155,9 +155,7 @@ Accepted file types: PDFs and images (`.pdf .png .jpg .jpeg .tif .tiff .bmp .web
     ├── k8s/                # RabbitMQ, API, secret template
     ├── scripts/            # Container smoke test, fake worker for tests, queue migration
     ├── tests/              # Unit, metrics and RabbitMQ integration tests
-    ├── templates/, static/ # Old server-rendered UI, no longer served (the UI is on the `frontend` branch)
-    ├── data/, output/, structured_output/  # Sample documents and example OCR / extraction output
-    ├── research/           # Notebook from the original prototype
+    ├── data/               # Sample documents for trying the API
     ├── requirements.txt    # API dependencies (no ML libraries)
     └── .env                # Your Gemini API key (git-ignored)
 
