@@ -1,12 +1,12 @@
 # Render Blueprint: InvoiceAI as one free web service (Dockerfile.lite: API + in-process Gemini worker).
-# Render dashboard -> New -> Blueprint -> this repo, branch "lite". You'll be asked for GOOGLE_API_KEY.
+# Render dashboard -> New -> Blueprint -> this repo, branch "backend_lite". You'll be asked for GOOGLE_API_KEY.
 # Free services sleep after 15 min without requests; ping /health every 5 min (e.g. UptimeRobot) to keep it up.
 services:
   - type: web
     name: invoiceai-api
     runtime: docker
     plan: free
-    branch: lite
+    branch: backend_lite
     dockerfilePath: ./Dockerfile.lite
     healthCheckPath: /health
     autoDeploy: true
