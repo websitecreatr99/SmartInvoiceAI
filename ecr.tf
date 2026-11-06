@@ -1,6 +1,8 @@
-# One repository per image: api is built from the fastapi branch, worker from the worker branch.
+# One repository per image: api is built from the fastapi branch, worker from the worker branch,
+# frontend from the frontend branch. The same set also drives the log groups (ecs.tf) and the
+# Cloud Map services (monitoring.tf).
 locals {
-  images = toset(["api", "worker"])
+  images = toset(["api", "worker", "frontend"])
 }
 
 resource "aws_ecr_repository" "app" {

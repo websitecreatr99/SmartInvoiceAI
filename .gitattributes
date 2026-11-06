@@ -1,0 +1,3 @@
+# Scripts run on Linux (EC2 user_data); keep LF even on Windows checkouts with core.autocrlf.
+*.sh text eol=lf
+*.tftpl text eol=lf

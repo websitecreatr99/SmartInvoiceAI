@@ -1,5 +1,6 @@
 terraform {
-  required_version = ">= 1.6.0"
+  # >= 1.7 for mock_provider in tests/plan.tftest.hcl.
+  required_version = ">= 1.7.0"
 
   required_providers {
     aws = {
@@ -9,6 +10,11 @@ terraform {
     random = {
       source  = "hashicorp/random"
       version = "~> 3.6"
+    }
+    # Zips the tracking stack for the monitoring host (monitoring_host.tf).
+    archive = {
+      source  = "hashicorp/archive"
+      version = "~> 2.4"
     }
   }
 

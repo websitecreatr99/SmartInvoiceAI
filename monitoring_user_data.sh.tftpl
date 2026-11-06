@@ -1,0 +1,34 @@
+#!/bin/bash
+# Monitoring host bootstrap, rendered by monitoring_host.tf. Output: /var/log/cloud-init-output.log
+# Tracking bundle sha256: ${bundle_hash}
+set -euo pipefail
+
+# Docker + a pinned compose v2 plugin (AL2023 ships the AWS CLI). docker-compose.aws.yml uses
+# `!override`, which needs Compose >= 2.24.4.
+dnf install -y docker unzip jq
+mkdir -p /usr/libexec/docker/cli-plugins
+curl -fsSL -o /usr/libexec/docker/cli-plugins/docker-compose \
+  "https://github.com/docker/compose/releases/download/${compose_version}/docker-compose-linux-x86_64"
+chmod +x /usr/libexec/docker/cli-plugins/docker-compose
+systemctl enable --now docker
+
+# Tracking stack from the artifacts bucket.
+rm -rf /opt/tracking
+mkdir -p /opt/tracking
+aws s3 cp --region "${region}" "s3://${bundle_bucket}/${bundle_key}" /tmp/tracking.zip
+unzip -q -o /tmp/tracking.zip -d /opt/tracking
+rm -f /tmp/tracking.zip
+
+# Generated credentials -> .env (one KEY=value per JSON key), plus the CloudWatch exporter inputs.
+umask 077
+aws secretsmanager get-secret-value --region "${region}" --secret-id "${secret_id}" \
+  --query SecretString --output text \
+  | jq -r 'to_entries[] | "\(.key)=\(.value)"' > /opt/tracking/.env
+cat >> /opt/tracking/.env <<EOF
+AWS_REGION=${region}
+MQ_BROKER_NAME=${broker_name}
+EOF
+
+docker network create invoiceai || true
+cd /opt/tracking
+docker compose -f docker-compose.yml -f docker-compose.aws.yml --profile langfuse up -d
