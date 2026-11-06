@@ -19,7 +19,7 @@ from src.logger_config import setup_logger
 
 logger = setup_logger(__name__)
 
-GEMINI_OCR_MODEL = os.getenv("GEMINI_OCR_MODEL") or os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+GEMINI_OCR_MODEL = os.getenv("GEMINI_OCR_MODEL") or os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
 OCR_TIMEOUT_SECONDS = float(os.getenv("GEMINI_OCR_TIMEOUT_SECONDS", "300"))
 OCR_MAX_RETRIES = int(os.getenv("LLM_MAX_RETRIES", "3"))
 

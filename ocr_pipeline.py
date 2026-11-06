@@ -307,7 +307,7 @@ def process_extracted_texts(input_folder: str = "output", save_folder: str = "st
     """
     os.makedirs(save_folder, exist_ok=True)
 
-    model_handler = ModelHandler("gemini-2.5-flash")
+    model_handler = ModelHandler(os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite"))
     handler = DataExtractionHandler()
 
     for root, _, files in os.walk(input_folder):

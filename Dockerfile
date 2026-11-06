@@ -21,7 +21,7 @@ COPY requirements.txt setup.py ./
 COPY src ./src
 RUN pip install -r requirements.txt
 
-COPY ocr_pipeline.py worker.py ./
+COPY ocr_pipeline.py gemini_ocr.py telemetry.py worker.py ./
 
 RUN useradd --create-home --uid 1000 appuser \
     && mkdir -p logs \

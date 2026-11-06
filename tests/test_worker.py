@@ -321,3 +321,54 @@ def test_large_object_is_not_downloaded(monkeypatch, tmp_path):
     with pytest.raises(ValueError, match="limit"):
         storage.download({"file_key": "k"}, str(tmp_path / "a.pdf"), 100)
     assert not (tmp_path / "a.pdf").exists()
+
+
+def test_scale_in_protection_is_off_outside_ecs(monkeypatch):
+    calls = []
+    monkeypatch.setattr(worker.urllib.request, "urlopen", lambda *a, **k: calls.append(a))
+    p = worker.ScaleInProtection(None)
+    p.job_started()
+    p.job_finished()
+    assert calls == []
+
+
+def test_scale_in_protection_wraps_each_job(monkeypatch):
+    sent = []
+
+    class Response:
+        def close(self):
+            pass
+
+    def urlopen(request, timeout):
+        sent.append((request.full_url, request.get_method(), json.loads(request.data)))
+        return Response()
+
+    monkeypatch.setattr(worker.urllib.request, "urlopen", urlopen)
+    p = worker.ScaleInProtection("http://169.254.170.2/api/abc")
+    p.job_started()
+    p.job_finished()
+    for _ in range(50):
+        if len(sent) == 2:
+            break
+        time.sleep(0.01)
+
+    url = "http://169.254.170.2/api/abc/task-protection/v1/state"
+    assert sent[0] == (url, "PUT", {"ProtectionEnabled": True, "ExpiresInMinutes": worker.JOB_TIMEOUT_SECONDS // 60 + 5})
+    assert sent[1] == (url, "PUT", {"ProtectionEnabled": False})
+
+
+def test_scale_in_protection_stays_on_when_next_job_already_started(monkeypatch):
+    sent = []
+    monkeypatch.setattr(worker.urllib.request, "urlopen", lambda r, timeout: sent.append(json.loads(r.data)) or type("R", (), {"close": lambda s: None})())
+    p = worker.ScaleInProtection("http://agent")
+    p.in_job = True  # the next job started before the release thread ran
+    p._release()
+    assert sent == []
+
+
+def test_agent_errors_never_break_a_job(monkeypatch):
+    def boom(*a, **k):
+        raise OSError("agent unreachable")
+
+    monkeypatch.setattr(worker.urllib.request, "urlopen", boom)
+    worker.ScaleInProtection("http://agent").job_started()  # logs a warning, doesn't raise
