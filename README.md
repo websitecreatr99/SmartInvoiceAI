@@ -4,7 +4,14 @@ Next.js UI for InvoiceAI. Drop in invoices, purchase orders or other business do
 
 ## Running
 
-The app proxies `/api/*` to the FastAPI app (`app.py` on the `fastapi` branch) at `http://127.0.0.1:5000`. Set `BACKEND_URL` to point elsewhere. Processing needs the rest of the stack (RabbitMQ and at least one worker): see the `fastapi` branch README.
+The app proxies `/api/*` to the FastAPI app (`app.py` on the `fastapi` branch) at `http://127.0.0.1:5000`. Set `BACKEND_URL` to point elsewhere. Processing needs the rest of the stack (RabbitMQ and at least one worker, see the `fastapi` branch README), or the single-service build on the `lite` branch, which needs neither.
+
+Next.js is pinned to 15.5.29; Vercel refuses to deploy the vulnerable 15.5.4 it was on before.
+
+| Variable | When it's read | Meaning |
+|----------|----------------|---------|
+| `BACKEND_URL` | Build time (`next.config.ts` rewrites) | Where `/api/*` is proxied; default `http://127.0.0.1:5000` |
+| `NEXT_PUBLIC_API_URL` | Build time (inlined into the browser bundle) | Optional: the browser calls this API directly instead of `/api`. The API must list the site in its `CORS_ORIGINS` |
 
 With the backend running:
 
@@ -16,6 +23,17 @@ npm run dev
 Open [http://localhost:3000](http://localhost:3000).
 
 Checks: `npx tsc --noEmit`, `npm run lint`, `npm run build`.
+
+## Deploying (Vercel)
+
+The live site, https://hackathon-frontend-gamma-seven.vercel.app, is a Vercel project deployed from this branch with the Vercel CLI. It isn't connected to Git, so pushing doesn't redeploy it. `BACKEND_URL` is baked in at build time, so pass it on every deploy:
+
+```bash
+npx vercel link                # once per checkout: pick the existing hackathon-frontend project
+npx vercel deploy --prod --build-env BACKEND_URL=https://hackathon-elnx.onrender.com
+```
+
+The backend is the `lite` branch on Render's free tier, which sleeps after 15 minutes without traffic; the first request after that takes 20 to 60 s.
 
 ## How it works
 
