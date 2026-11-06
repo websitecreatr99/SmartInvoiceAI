@@ -28,6 +28,9 @@ spec:
                   key: RABBITMQ_URL
             - name: STORAGE_DIR
               value: /app/storage
+            # Keyless requests use the workers' GOOGLE_API_KEY; "1" answers them with sample data instead.
+            - name: DEMO_WITHOUT_KEY
+              value: "0"
             # Uploads go to this bucket and jobs carry only the object key. On EKS prefer IRSA
             # (a service account role) over static AWS keys; S3_ENDPOINT_URL is for MinIO / GCS / R2.
             - name: STORAGE_BUCKET

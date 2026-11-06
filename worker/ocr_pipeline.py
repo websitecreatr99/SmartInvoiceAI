@@ -147,6 +147,7 @@ from src.common import ColumnExtraction, DataExtractionHandler, Extraction
 from langchain.output_parsers import OutputFixingParser
 from langchain_core.exceptions import OutputParserException
 from google.api_core import exceptions as google_errors
+from src import credentials
 from src.errors import TransientError
 from src.logger_config import setup_logger
 
@@ -278,7 +279,9 @@ class ModelHandler:
         """
         config = {"callbacks": callbacks or []}
         try:
-            gemini_llm = ChatGoogleGenerativeAI(model=self.model, timeout=LLM_TIMEOUT_SECONDS, max_retries=LLM_MAX_RETRIES)
+            gemini_llm = ChatGoogleGenerativeAI(
+                model=self.model, timeout=LLM_TIMEOUT_SECONDS, max_retries=LLM_MAX_RETRIES, **credentials.llm_kwargs()
+            )
             raw_output = (template | gemini_llm).invoke(inputs, config=config).content
             try:
                 return parser.parse(raw_output).model_dump()
@@ -290,6 +293,7 @@ class ModelHandler:
         except TRANSIENT_LLM_ERRORS as e:
             raise TransientError(f"Gemini unavailable: {type(e).__name__}: {e}") from e
         except Exception as e:
+            credentials.check_rejected_key(e)
             logger.error(f"Error during Gemini extraction: {type(e).__name__}")
             return None
 
@@ -307,7 +311,7 @@ def process_extracted_texts(input_folder: str = "output", save_folder: str = "st
     """
     os.makedirs(save_folder, exist_ok=True)
 
-    model_handler = ModelHandler("gemini-2.5-flash")
+    model_handler = ModelHandler(os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite"))
     handler = DataExtractionHandler()
 
     for root, _, files in os.walk(input_folder):
