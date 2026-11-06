@@ -7,10 +7,13 @@ This branch is the **API**. The other parts of the system live on their own bran
 | Branch | What |
 |--------|------|
 | `fastapi` (this one) | HTTP API: accepts uploads, queues work, collects results |
-| `worker` | OCR + LLM extraction pods that consume the queue |
-| `frontend` | Next.js web UI (talks to this API through `/api/*`) |
+| `worker` | OCR + LLM extraction pods that consume the queue (PaddleOCR, or Gemini with `OCR_ENGINE=gemini`) |
+| `lite` | This API plus the worker in one process, no RabbitMQ: the free deployment on Render |
+| `frontend` | Next.js web UI (talks to this API through `/api/*`), deployed on Vercel |
 | `tracking` | Prometheus, Loki, Grafana and Langfuse |
-| `infra` | Terraform for AWS (ECS Fargate, Amazon MQ, EFS) |
+| `infra` | Terraform for AWS (ECS Fargate, Amazon MQ, EFS), plus Hugging Face and Oracle bundles |
+
+**Live demo** (free tier, built from the `lite` and `frontend` branches): https://hackathon-frontend-gamma-seven.vercel.app. The backend sleeps when idle, so the first request can take up to a minute.
 
 ---
 
