@@ -1,0 +1,94 @@
+name: Frontend CI/CD
+
+on:
+  push:
+    branches: [frontend]
+  pull_request:
+    branches: [frontend]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Typecheck, lint, build & image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+      - run: npx tsc --noEmit
+      - run: npm run lint
+      - run: npm run build
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build image and check it serves the UI
+        run: |
+          docker build -t invoiceai-frontend:ci .
+          docker run -d --name frontend -p 3000:3000 invoiceai-frontend:ci
+          for i in $(seq 1 30); do curl -fsS -o /dev/null localhost:3000 && break; sleep 1; done
+          curl -fsS localhost:3000 | grep -q '<html'
+
+  # Runs only once the infra branch's Terraform is applied and the repository variable
+  # AWS_DEPLOY_ROLE_ARN is set (Terraform output github_deploy_role_arn); until then it is skipped.
+  deploy-aws:
+    name: Deploy to AWS ECS
+    needs: check
+    if: github.event_name == 'push' && vars.AWS_DEPLOY_ROLE_ARN != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION || 'ap-south-1' }}
+      ECR_REPOSITORY: invoiceai-frontend
+      ECS_CLUSTER: ${{ vars.ECS_CLUSTER || 'invoiceai-prod-cluster' }}
+      ECS_SERVICE: invoiceai-prod-frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - uses: docker/setup-buildx-action@v3
+
+      # ECR tags are immutable: one tag per commit.
+      - name: Build and push to ECR
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}
+          build-args: BACKEND_URL=${{ vars.FRONTEND_BACKEND_URL || 'http://api.invoiceai.local:5000' }}
+          cache-from: type=gha
+
+      # The task definition family has the service's name; Terraform created revision 1.
+      - name: Current task definition
+        run: aws ecs describe-task-definition --task-definition "$ECS_SERVICE" --query taskDefinition > task-definition.json
+
+      - id: render
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: task-definition.json
+          container-name: frontend
+          image: ${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}
+
+      - uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+        with:
+          task-definition: ${{ steps.render.outputs.task-definition }}
+          service: ${{ env.ECS_SERVICE }}
+          cluster: ${{ env.ECS_CLUSTER }}
+          wait-for-service-stability: true
