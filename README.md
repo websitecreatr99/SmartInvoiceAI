@@ -2,15 +2,18 @@
 
 InvoiceAI extracts **structured data** from **unstructured business documents** (invoices, purchase orders and similar) using **OCR + an LLM (Gemini)**. Either it fills the invoice schema (header + line items), or it pulls just the columns you name. Every value cites the document line it came from.
 
-This branch is the **API**. The other parts of the system live on their own branches:
+This is the **`lite` branch**: the `fastapi` branch's API plus a copy of the worker that runs inside the API process, so the whole backend is one small service with no RabbitMQ. It is what runs the free live deployment (see [Single free service](#-single-free-service-lite-branch)). The other parts of the system live on their own branches:
 
 | Branch | What |
 |--------|------|
-| `fastapi` (this one) | HTTP API: accepts uploads, queues work, collects results |
-| `worker` | OCR + LLM extraction pods that consume the queue |
-| `frontend` | Next.js web UI (talks to this API through `/api/*`) |
+| `fastapi` | HTTP API: accepts uploads, queues work, collects results |
+| `lite` (this one) | `fastapi` + the worker in one process, no RabbitMQ: the free deployment on Render |
+| `worker` | OCR + LLM extraction pods that consume the queue (PaddleOCR, or Gemini with `OCR_ENGINE=gemini`) |
+| `frontend` | Next.js web UI (talks to this API through `/api/*`), deployed on Vercel |
 | `tracking` | Prometheus, Loki, Grafana and Langfuse |
-| `infra` | Terraform for AWS (ECS Fargate, Amazon MQ, EFS) |
+| `infra` | Terraform for AWS (ECS Fargate, Amazon MQ, EFS), plus Hugging Face and Oracle bundles |
+
+**Live:** frontend https://hackathon-frontend-gamma-seven.vercel.app, backend https://hackathon-elnx.onrender.com (`/health`, `/docs`). The backend sleeps when idle, so the first request can take up to a minute.
 
 ---
 
@@ -85,9 +88,11 @@ The slow work (OCR + LLM extraction) runs on the `worker` branch's pods:
 
 `Dockerfile.lite` runs everything as one small service: the API plus the worker's pipeline in-process (`INLINE_WORKER=1`, `inline_worker.py`), with Gemini transcribing documents instead of PaddleOCR (`OCR_ENGINE=gemini`). No RabbitMQ, about 110 MB of RAM, so it fits Render's free web service.
 
-1. Render → **New → Blueprint** → this repo, branch `lite`. `render.yaml` defines the service; enter `GOOGLE_API_KEY` when asked.
+1. Render → **New → Blueprint** → this repo, branch `lite`. `render.yaml` defines the service; enter `GOOGLE_API_KEY` when asked. If your account has no Blueprint option, create a **Web Service** instead: runtime Docker, branch `lite`, Dockerfile path `./Dockerfile.lite`, health check `/health`, instance type Free, and the environment variables listed in `render.yaml`.
 2. Free services sleep after 15 minutes without requests: add a free UptimeRobot HTTP monitor on `https://<service>.onrender.com/health` every 5 minutes.
-3. Point the frontend at it: `BACKEND_URL=https://<service>.onrender.com` on Vercel.
+3. Point the frontend at it: deploy the `frontend` branch to Vercel with `BACKEND_URL=https://<service>.onrender.com` (a build-time variable; see that branch's README), and put the Vercel URL in `CORS_ORIGINS`.
+
+The live service redeploys automatically on every push to `lite`. It uses `GEMINI_MODEL=gemini-3.5-flash-lite` for extraction and `GEMINI_OCR_MODEL=gemini-3.1-flash-lite` for OCR (Gemini 2.5 models are closed to new API keys). Flash-Lite occasionally returns output that fails validation, so the in-process worker retries such a document once.
 
 `worker/` is a copy of the worker branch's pipeline: refresh it with `scripts/sync_worker.sh`. Trade-offs against the RabbitMQ setup: one document at a time, no redelivery if the process restarts mid-job, job history is lost on restart, and Gemini's free tier caps the documents per day (each document is two requests; `GEMINI_OCR_MODEL` and `GEMINI_MODEL` use separate quotas).
 
@@ -162,9 +167,13 @@ Accepted file types: PDFs and images (`.pdf .png .jpg .jpeg .tif .tiff .bmp .web
     ├── object_store.py     # Uploads files to the bucket for the workers
     ├── job_store.py        # Job state and results on disk
     ├── metrics.py          # Prometheus metrics
+    ├── inline_worker.py    # INLINE_WORKER=1: runs the worker pipeline in-process, with retries
+    ├── worker/             # Copy of the worker branch's pipeline (scripts/sync_worker.sh)
+    ├── Dockerfile.lite     # Single free service: API + in-process worker, Gemini OCR
+    ├── render.yaml         # Render Blueprint for Dockerfile.lite
     ├── docker-compose.yml  # RabbitMQ + API + worker pods
     ├── k8s/                # RabbitMQ, API, secret template
-    ├── scripts/            # Container smoke test, fake worker for tests, queue migration
+    ├── scripts/            # Container smoke test, fake worker for tests, queue migration, sync_worker.sh
     ├── tests/              # Unit, metrics and RabbitMQ integration tests
     ├── data/               # Sample documents for trying the API
     ├── requirements.txt    # API dependencies (no ML libraries)
