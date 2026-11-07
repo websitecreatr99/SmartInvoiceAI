@@ -51,6 +51,8 @@ services:
     environment:
       RABBITMQ_URL: amqp://invoiceai:${RABBITMQ_PASSWORD}@rabbitmq:5672/%2F
       STORAGE_DIR: /app/storage
+      # Keyless jobs use GOOGLE_API_KEY from .env; "1" answers them with sample data instead.
+      DEMO_WITHOUT_KEY: "0"
       CORS_ORIGINS: https://${DOMAIN}
     volumes:
       - storage:/app/storage
