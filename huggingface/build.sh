@@ -13,8 +13,8 @@ root="$(git -C "$here" rev-parse --show-toplevel)"
 
 mkdir -p "$out/api" "$out/worker"
 cp -r "$here/space/." "$out/"
-git -C "$root" archive "$API_REF" app.py broker.py job_store.py metrics.py object_store.py queues.py requirements.txt \
+git -C "$root" archive "$API_REF" app.py broker.py demo.py job_store.py metrics.py object_store.py queues.py requirements.txt \
   | tar -x -C "$out/api"
-# telemetry.py is imported by worker.py (the worker branch's own Dockerfile misses it).
-git -C "$root" archive "$WORKER_REF" worker.py ocr_pipeline.py telemetry.py setup.py requirements.txt src \
+# Everything worker.py imports; gemini_ocr.py only runs with OCR_ENGINE=gemini.
+git -C "$root" archive "$WORKER_REF" worker.py ocr_pipeline.py gemini_ocr.py telemetry.py setup.py requirements.txt src \
   | tar -x -C "$out/worker"
