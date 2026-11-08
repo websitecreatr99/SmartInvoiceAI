@@ -46,3 +46,5 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 logs/
+SmartInvoiceAI-backup.git
+SmartInvoiceAI-clean.git
