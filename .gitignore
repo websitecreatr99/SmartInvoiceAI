@@ -168,3 +168,5 @@ k8s/secret.yaml
 .venv/
 node_modules/
 .pytest_cache/
+SmartInvoiceAI-backup.git/
+SmartInvoiceAI-clean.git/
