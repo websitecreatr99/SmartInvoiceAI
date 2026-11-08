@@ -11,3 +11,5 @@ node_modules/
 __pycache__/
 logs/
 .env
+SmartInvoiceAI-backup.git/
+SmartInvoiceAI-clean.git/
