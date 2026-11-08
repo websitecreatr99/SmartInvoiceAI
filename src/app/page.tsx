@@ -18,7 +18,7 @@ const POLL_TIMEOUT_MS = 15 * 60 * 1000;
 const MAX_POLL_ERRORS = 3;
 
 // Source code link in the header. Override with NEXT_PUBLIC_GITHUB_URL (read at build time).
-const GITHUB_URL = process.env.NEXT_PUBLIC_GITHUB_URL ?? "https://github.com/kishannextq/hackathon";
+const GITHUB_URL = process.env.NEXT_PUBLIC_GITHUB_URL ?? "https://github.com/websitecreatr99/SmartInvoiceAI";
 // Where "Remember on this device" keeps the key. Browser storage can be blocked, so every access is guarded.
 const KEY_STORAGE = "invoiceai.geminiApiKey";
 
