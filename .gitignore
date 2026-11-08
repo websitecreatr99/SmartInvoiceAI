@@ -168,3 +168,5 @@ k8s/secret.yaml
 .next/
 .venv/
 node_modules/
+SmartInvoiceAI-backup.git/
+SmartInvoiceAI-clean.git/
